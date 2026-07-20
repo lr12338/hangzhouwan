@@ -66,7 +66,7 @@
 - 明文凭据（RTSP 账号密码 / RTMP 推流地址 / MQTT 账号密码 / 船名 usertoken / EZVIZ 令牌 / Agora 凭据）
   全部移出源码，改为环境变量注入；`streams` 默认 `disabled`。
 - Windows 绝对路径（ffmpeg/字体/模型）全部改为仓库相对路径 + 环境变量覆盖。
-- 船名查询固定生产端点 `alpha.hifleet.com` 外置为 `SHIP_NAME_API_ENDPOINT`（默认空则不调用）。
+- 船名查询固定生产端点（hifleet 公开 API）外置为 `SHIP_NAME_API_ENDPOINT`（默认空则不调用）。
 - `except: pass` 改为受控中文日志（`getais.py` / `getais_flask.py`）。
 - 新增 `config/application.example.yaml`（无真实敏感值）、`.env.example`、`config/README.md`。
 - `.gitignore` 重写并补齐；80MB 含凭据产物 `output.txt` 已 untrack（本地保留）。
