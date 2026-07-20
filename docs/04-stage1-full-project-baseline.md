@@ -66,6 +66,7 @@
 - 明文凭据（RTSP 账号密码 / RTMP 推流地址 / MQTT 账号密码 / 船名 usertoken / EZVIZ 令牌 / Agora 凭据）
   全部移出源码，改为环境变量注入；`streams` 默认 `disabled`。
 - Windows 绝对路径（ffmpeg/字体/模型）全部改为仓库相对路径 + 环境变量覆盖。
+- 船名查询固定生产端点 `alpha.hifleet.com` 外置为 `SHIP_NAME_API_ENDPOINT`（默认空则不调用）。
 - `except: pass` 改为受控中文日志（`getais.py` / `getais_flask.py`）。
 - 新增 `config/application.example.yaml`（无真实敏感值）、`.env.example`、`config/README.md`。
 - `.gitignore` 重写并补齐；80MB 含凭据产物 `output.txt` 已 untrack（本地保留）。
@@ -135,9 +136,10 @@
 |---|---|---|
 | 1 | `20cf393` | chore: 建立BM1684安全配置和中文日志基础 |
 | 2 | `6e0437f` | test: 增加配置脱敏与资产检查测试 |
-| 3 | 本提交 | docs: 补充完整项目迁移基线和资产清单 |
+| 3 | `03d1007` | docs: 补充完整项目迁移基线和资产清单 |
+| 4 | `7892155` | fix: 移除测试夹具与源码中残留的真实凭据/生产地址 |
 
-- 分支：`feat/bm1684-edge-deployment`；未提交残留：无（docs 为本提交）。
+- 分支：`feat/bm1684-edge-deployment`；未提交残留：无。
 - 模型/大文件：三模型缺失；`output.txt` 已 untrack（本地 80MB 保留，不入库）。
 - 历史敏感信息：初始提交 `56d380f3` 含明文凭据（仓库 public），须轮换（见凭据清单），不重写历史。
 
