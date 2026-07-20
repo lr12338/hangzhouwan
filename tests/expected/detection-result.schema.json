@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "船舶检测结果",
+  "description": "单帧 YOLOv7 单类 ship 检测输出（BM1684 BMRuntime 阶段对齐用）",
+  "type": "object",
+  "required": ["frame_id", "stream_id", "width", "height", "detections"],
+  "properties": {
+    "frame_id": {"type": "integer", "minimum": 0},
+    "stream_id": {"type": "string", "enum": ["A", "B"]},
+    "width": {"type": "integer", "minimum": 1},
+    "height": {"type": "integer", "minimum": 1},
+    "inference_ms": {"type": "number", "minimum": 0},
+    "detections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["x1", "y1", "x2", "y2", "score", "class_id"],
+        "properties": {
+          "x1": {"type": "number"},
+          "y1": {"type": "number"},
+          "x2": {"type": "number"},
+          "y2": {"type": "number"},
+          "score": {"type": "number", "minimum": 0, "maximum": 1},
+          "class_id": {"type": "integer", "minimum": 0},
+          "class_name": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

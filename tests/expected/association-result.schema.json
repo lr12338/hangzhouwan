@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AIS 关联结果",
+  "description": "检测框经坐标模型映射后与 AIS 最近邻船舶关联结果",
+  "type": "object",
+  "required": ["frame_id", "stream_id", "associations"],
+  "properties": {
+    "frame_id": {"type": "integer", "minimum": 0},
+    "stream_id": {"type": "string", "enum": ["A", "B"]},
+    "associations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["box", "longitude", "latitude"],
+        "properties": {
+          "box": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+          "longitude": {"type": "number"},
+          "latitude": {"type": "number"},
+          "mmsi": {"type": ["integer", "null"]},
+          "ship_name": {"type": ["string", "null"]},
+          "speed_knots": {"type": ["number", "null"]},
+          "distance_km": {"type": ["number", "null"]},
+          "matched": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
