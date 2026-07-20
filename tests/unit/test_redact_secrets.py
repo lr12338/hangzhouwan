@@ -32,9 +32,9 @@ class RedactTest(unittest.TestCase):
         self.assertIn("usertoken=<已脱敏>", out)
 
     def test_mqtt_password(self):
-        src = 'PASSWORD = "hangzhouwan_lurui"'
+        src = 'PASSWORD = "FakeMqttPwd123"'
         out = redact(src)
-        self.assertNotIn("hangzhouwan_lurui", out)
+        self.assertNotIn("FakeMqttPwd123", out)
         self.assertIn("已脱敏", out)
 
     def test_authorization_bearer(self):

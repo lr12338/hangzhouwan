@@ -167,10 +167,10 @@ def run_flask():
 
 def findname(mmsi):
     token = os.environ.get("SHIP_NAME_API_TOKEN", "")
-    if not token:
+    endpoint = os.environ.get("SHIP_NAME_API_ENDPOINT", "")
+    if not token or not endpoint:
         return None
-    url = ('https://alpha.hifleet.com/hifleetapi/getShipAisNameByMmsis.do'
-           '?mmsis=' + str(mmsi) + '&usertoken=' + token)
+    url = endpoint + '?mmsis=' + str(mmsi) + '&usertoken=' + token
     r = requests.get(url)
     dictinfo = json.loads(r.text)
     return dictinfo[0]['name']

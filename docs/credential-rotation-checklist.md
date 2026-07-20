@@ -14,7 +14,7 @@
 | 2 | RTMP 推流地址（含流 Key） | `utils_demo/config.py:12,29` / `config.py:10,27` / `demo.py:479,485` | 是 | 更换推流 App/StreamKey；新值仅经 `STREAM_A_OUTPUT_URL`/`STREAM_B_OUTPUT_URL` 注入 |
 | 3 | EZVIZ(萤石) HLS 开放令牌 | `utils_demo/config.py:10-11,27-28`(注释) / `demo.py:476,482` / `detect.py:172` | 是 | 在萤石开放平台作废旧令牌并重发；不再硬编码 |
 | 4 | MQTT 账号/密码 | `utils_demo/getais.py:24-26` / `getais_flask.py:25-27` | 是 | 更换 MQTT 用户/密码；新值经 `AIS_MQTT_CLIENT_ID/USERNAME/PASSWORD` 注入 |
-| 5 | 船名查询 HTTP usertoken | `utils_demo/getais.py:152` / `getais_flask.py:170` | 是 | 在 hifleet 平台轮换 token；新值经 `SHIP_NAME_API_TOKEN` 注入 |
+| 5 | 船名查询 HTTP 端点 + usertoken | `utils_demo/getais.py:152` / `getais_flask.py:170` | 是 | 轮换 token；端点与令牌均外置，经 `SHIP_NAME_API_ENDPOINT`/`SHIP_NAME_API_TOKEN` 注入，默认空则不调用 |
 | 6 | 声网(Agora) token / APPID / APP证书 | `utils_demo/method.py:6-8`(注释) | 是 | 在 Agora 控制台重置 APP 证书；如不再使用则注销 |
 | 7 | 嵌入运行时产物的 RTSP/RTMP 地址 | `hangzhouwan_beishang/output.txt`（80MB，已 untrack） | 是（已 untrack） | 同 #1/#2 一并轮换；产物不再入库 |
 
@@ -34,14 +34,16 @@
 | `STREAM_A_INPUT_URL` / `STREAM_B_INPUT_URL` | A/B 路 RTSP 输入 |
 | `STREAM_A_OUTPUT_URL` / `STREAM_B_OUTPUT_URL` | A/B 路 RTMP 推流 |
 | `AIS_MQTT_CLIENT_ID` / `AIS_MQTT_USERNAME` / `AIS_MQTT_PASSWORD` | MQTT 凭据 |
+| `SHIP_NAME_API_ENDPOINT` | 船名查询服务端点（默认空则不调用） |
 | `SHIP_NAME_API_TOKEN` | 船名查询令牌 |
 
 真实部署：`/data/hangzhouwan/config/.env`（权限 `chmod 600`），不入库。
 
 ## 4. 整改后自检
 
-- `git grep -nE 'Few181818|hangzhouwanpush|iot\.hifleet|hangzhouwan_lurui|usertoken=12|open\.ys7'`
-  在当前分支源码（`*.py/*.md/*.bat/*.txt`）中 **0 命中**（测试夹具已改用合成值）。
+- 对已知生产凭据特征串（摄像机口令、推流主机、MQTT 账号、船名令牌、EZVIZ 令牌等，
+  具体值见内部轮换记录，不在本文件展开）执行 `git grep`，在当前分支源码
+  （`*.py/*.md/*.bat/*.txt/*.yaml`）中 **0 命中**（测试夹具已改用合成值，不含真实凭据）。
 - 示例配置 `config/application.example.yaml` 无任何真实地址/用户名/密码/令牌。
 - 脱敏工具 `tools/redact_secrets.py` 与单测 `tests/unit/test_redact_secrets.py` 覆盖
   RTSP 账号密码、RTMP Key、URL Token、MQTT 密码、Authorization、普通 URL、空串、非法 URL。
