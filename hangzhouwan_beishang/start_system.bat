@@ -21,6 +21,6 @@ taskkill /F /IM ffmpeg.exe 2>nul
 
 REM ����3������������starter.py��
 echo [3/3] ����������...
-C:/Users/huangchao/.conda/envs/yolov7/python.exe starter.py
+python starter.py
 
 pause
