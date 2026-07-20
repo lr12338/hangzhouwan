@@ -7,6 +7,7 @@ import time
 import threading
 import subprocess
 import sys
+import os
 from utils_demo import getais
 from utils_demo.plot import Plot_one_box
 from utils_demo.method import get_bbox_center, should_draw_bbox
@@ -217,7 +218,7 @@ class VideoStreamHandler:
 
     def start_ffmpeg_stream(self):
         """初始化FFmpeg推流进程"""
-        ffmpeg_path = "D:\\huangchao\\ffmpeg\\bin\\ffmpeg.exe"
+        ffmpeg_path = os.environ.get("HANGZHOUWAN_FFMPEG_PATH", "ffmpeg")
         command = [
             ffmpeg_path,
             '-y',
@@ -415,7 +416,7 @@ yolov7_detector = YOLOv7(r'./weights/best.onnx', conf_thres=0.1, iou_thres=0.1)
 # 北下流A的配置
 # --------------------------
 A_config = StreamConfig(
-    stream_url = 'http://open.ys7.com/v3/openlive/FS5533687_8_1.m3u8?expire=1766651274&id=793878039684980736&t=04ee1ce4f559056f4d9cad47c07f948f4a55390c616dfa6f05ac6642c6e7756f&ev=100',
+    stream_url = os.environ.get('STREAM_A_INPUT_URL', ''),
     stream_id="A",
     forbidden_rectangles=A_forbidden_rectangles,
     forbidden_polygons=A_forbidden_polygons,
@@ -428,7 +429,7 @@ A_config = StreamConfig(
 # --------------------------
 
 B_config = StreamConfig(
-    stream_url = 'http://open.ys7.com/v3/openlive/FS5533687_3_1.m3u8?expire=1766651012&id=793876943232565248&t=9a6f3793c6225fe7385e4a5e83299860bdaf464eb080db76d554f9a4b3d582e3&ev=100',
+    stream_url = os.environ.get('STREAM_B_INPUT_URL', ''),
     stream_id="B",
     forbidden_rectangles=B_forbidden_rectangles,
     forbidden_polygons=B_forbidden_polygons,
@@ -440,7 +441,7 @@ B_config = StreamConfig(
 # # 南下流C的配置
 # # --------------------------
 # C_config = StreamConfig(
-#     stream_url = 'http://open.ys7.com/v3/openlive/FS5533687_8_1.m3u8?expire=1766651274&id=793878039684980736&t=04ee1ce4f559056f4d9cad47c07f948f4a55390c616dfa6f05ac6642c6e7756f&ev=100',
+#     stream_url = '<EZVIZ地址已脱敏，改用环境变量>',
 #     stream_id="C",
 #     forbidden_rectangles=C_forbidden_rectangles,
 #     forbidden_polygons=C_forbidden_polygons,
@@ -453,7 +454,7 @@ B_config = StreamConfig(
 # # --------------------------
 #
 # D_config = StreamConfig(
-#     stream_url = 'http://open.ys7.com/v3/openlive/FS5533677_5_1.m3u8?expire=1766668520&id=793950373854199808&t=eef5f8496dfdb4dd0f2686bbc2ab6fc5a1f78c5f112df5a9271d1f5212cd24ba&ev=100',
+#     stream_url = '<EZVIZ地址已脱敏，改用环境变量>',
 #     stream_id="D",
 #     forbidden_rectangles=D_forbidden_rectangles,
 #     forbidden_polygons=D_forbidden_polygons,
@@ -471,17 +472,13 @@ def main():
     # 定义流配置
     streams = [
         {
-            'stream_url': 'http://open.ys7.com/v3/openlive/FS5533687_8_1.m3u8?expire=1766651274&id=793878039684980736&t=04ee1ce4f559056f4d9cad47c07f948f4a55390c616dfa6f05ac6642c6e7756f&ev=100',
-            # 'rtmp_url': 'rtmp://localhost/live/test1' ,
-            # 'stream_url': 'rtsp://admin:Few181818@10.10.1.250:554/streaming/Channels/801',
-            'rtmp_url': 'rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth8_1',
+            'stream_url': os.environ.get('STREAM_A_INPUT_URL', ''),
+            'rtmp_url': os.environ.get('STREAM_A_OUTPUT_URL', ''),
             'config': A_config
         },
         {
-            'stream_url': 'http://open.ys7.com/v3/openlive/FS5533687_3_1.m3u8?expire=1766651012&id=793876943232565248&t=9a6f3793c6225fe7385e4a5e83299860bdaf464eb080db76d554f9a4b3d582e3&ev=100',
-            # 'stream_url': 'rtsp://admin:Few181818@10.10.1.250:554/streaming/Channels/301',
-            'rtmp_url': 'rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth3_1',
-            # 'rtmp_url': 'rtmp://localhost/live/test2',
+            'stream_url': os.environ.get('STREAM_B_INPUT_URL', ''),
+            'rtmp_url': os.environ.get('STREAM_B_OUTPUT_URL', ''),
             'config': B_config
         }
     ]

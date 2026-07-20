@@ -3,6 +3,7 @@ import threading
 import subprocess
 import time
 import logging
+import os
 from utils_demo.method import get_bbox_center, should_draw_bbox
 from utils_demo import getais
 from utils_demo.plot import Plot_one_box
@@ -60,7 +61,7 @@ class VideoStreamHandler:
 
     def start_ffmpeg_stream(self):
         """初始化FFmpeg推流进程"""
-        ffmpeg_path = "D:\\huangchao\\ffmpeg\\bin\\ffmpeg.exe"
+        ffmpeg_path = os.environ.get("HANGZHOUWAN_FFMPEG_PATH", "ffmpeg")
         command = [
             ffmpeg_path,
             '-y',

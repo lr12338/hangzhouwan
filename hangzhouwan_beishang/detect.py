@@ -7,7 +7,7 @@ import torch.backends.cudnn as cudnn
 from numpy import random
 
 import sys
-# yolov7_path = r'D:\huangchao\hangzhouwan_beishang\yolov7'
+# yolov7_path = 'yolov7'  # 阶段1：Windows 路径已移除
 # sys.path.append(yolov7_path)
 # print(sys.path)
 from yolov7.models.experimental import attempt_load
@@ -168,8 +168,8 @@ def detect(save_img=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=r'D:\huangchao\hangzhouwan_beishang\weights\beet0110.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default=r'http://open.ys7.com/v3/openlive/FS5533687_8_1.m3u8?expire=1766651274&id=793878039684980736&t=04ee1ce4f559056f4d9cad47c07f948f4a55390c616dfa6f05ac6642c6e7756f&ev=100', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--weights', nargs='+', type=str, default='weights/beet0110.pt', help='model.pt path(s)')
+    parser.add_argument('--source', type=str, default='', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')

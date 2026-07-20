@@ -1,0 +1,70 @@
+# 杭州湾双路船舶检测 · BM1684 边缘部署示例配置
+# 说明：本文件为示例，不含任何真实生产凭据、地址或令牌。
+#       真实配置请放置于 /data/hangzhouwan/config/application.yaml（权限 600），
+#       并通过环境变量注入 RTSP / RTMP / MQTT / Token 等敏感值。
+
+application:
+  environment: development        # development | staging | production
+  log_level: INFO                 # DEBUG | INFO | WARNING | ERROR
+  language: zh_CN
+
+inference:
+  backend: bmrt                   # 工控机正式后端：bmrt（BM1684 BMRuntime）
+  model_path: ""                  # best.onnx / best.bmodel 绝对路径，由部署注入
+  input_width: 640
+  input_height: 640
+  confidence_threshold: 0.1
+  iou_threshold: 0.1
+
+streams:
+  - id: A
+    enabled: false                # 默认全部禁用，未配置凭据时绝不连接正式流
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    coordinate_model: ""          # 0121_random_forest_model.pkl 路径，由部署注入
+    inference_fps: 5
+    output_fps: 10
+    output_width: 960
+    output_height: 540
+    output_bitrate_kbps: 800
+    forbidden_rectangles: []      # [[x1, y1, x2, y2], ...]
+    forbidden_polygons: []        # [[[x, y], ...], ...]
+
+  - id: B
+    enabled: false
+    input_url_env: STREAM_B_INPUT_URL
+    output_url_env: STREAM_B_OUTPUT_URL
+    coordinate_model: ""          # beishang_x-l.pkl 路径，由部署注入
+    inference_fps: 5
+    output_fps: 10
+    output_width: 960
+    output_height: 540
+    output_bitrate_kbps: 800
+    forbidden_rectangles: []
+    forbidden_polygons: []
+
+ais:
+  enabled: false
+  mqtt_host: ""
+  mqtt_port: 1883
+  mqtt_client_id_env: AIS_MQTT_CLIENT_ID
+  mqtt_username_env: AIS_MQTT_USERNAME
+  mqtt_password_env: AIS_MQTT_PASSWORD
+  topics: []                      # ["upAIS/base_2250", ...]
+  data_timeout_seconds: 30
+  max_distance_km: 30
+
+ship_name_service:
+  enabled: false
+  endpoint: ""                    # 船名查询 HTTP 端点
+  token_env: SHIP_NAME_API_TOKEN
+  connect_timeout_seconds: 3
+  read_timeout_seconds: 5
+  cache_ttl_seconds: 86400
+
+runtime:
+  frame_queue_size: 1             # 队列必须为 1，避免积压
+  processed_queue_size: 1
+  reconnect_initial_seconds: 2
+  reconnect_max_seconds: 30
+  health_check_interval_seconds: 10

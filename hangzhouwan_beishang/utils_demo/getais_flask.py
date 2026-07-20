@@ -12,6 +12,7 @@ import threading
 import time
 import math
 import re
+import os
 import logging
 from pyais import decode
 from paho.mqtt.client import Client
@@ -20,15 +21,14 @@ import json
 from flask import Flask, jsonify
 # 配置
 class Config:
-    BROKER_HOST = "iot.hifleet.com"
-    BROKER_PORT = 1883
-    CLIENT_ID = "hangzhouwan_lurui"
-    USERNAME = "hangzhouwan_lurui"
-    PASSWORD = "hangzhouwan_lurui"
-    # CLIENT_ID = "mqtt_hyw"
-    # USERNAME = "mqtt_hyw"
-    # PASSWORD = "mqtt_hyw"
-    AIS_TOPICS = ["upAIS/base_2250", "upAIS/base_2251"]  # 订阅的 AIS 主题
+    # 阶段1安全整改：MQTT 凭据与地址从环境变量读取，源码不再保留明文。
+    BROKER_HOST = os.environ.get("AIS_MQTT_HOST", "")
+    BROKER_PORT = int(os.environ.get("AIS_MQTT_PORT", "1883"))
+    CLIENT_ID = os.environ.get("AIS_MQTT_CLIENT_ID", "")
+    USERNAME = os.environ.get("AIS_MQTT_USERNAME", "")
+    PASSWORD = os.environ.get("AIS_MQTT_PASSWORD", "")
+    AIS_TOPICS = [t for t in os.environ.get(
+        "AIS_MQTT_TOPICS", "upAIS/base_2250,upAIS/base_2251").split(",") if t]
     B_POINT = (121.035267, 30.559733)
     EARTH_RADIUS = 6371.0  # 地球半径（千米）
     MAX_DISTANCE = 30  # 距离标记点 A 的最大距离（千米）
@@ -87,9 +87,9 @@ def on_message(client, userdata, msg):
         ship_info["Timestamp"] = timestamp
         try:
             ship_info["ShipName"] = findname(mmsi)
-        except:
-            # ship_info["ShipName"] = None
-            pass
+        except Exception as e:
+            ship_info["ShipName"] = None
+            logging.debug("船名查询失败 | MMSI=%s | 原因=%s", mmsi, e)
 
         # 根据消息类型提取属性
         if message.msg_type in [1, 3, 18,4]:  # MessageType1, MessageType3, MessageType18
@@ -116,8 +116,7 @@ def on_message(client, userdata, msg):
                 # logging.info(f"Updated Ship Data: {ship_data_dict[mmsi]}")
         # print(ship_data_dict)
     except Exception as e:
-        pass
-        # logging.error(f"Error processing message: {e}")
+        logging.warning("AIS消息处理异常 | 原因=%s", e)
 def clean_expired_data():
     """定期清理过期数据"""
     while True:
@@ -167,7 +166,11 @@ def run_flask():
     app.run(host='0.0.0.0', port=5000, threaded=True)
 
 def findname(mmsi):
-    url = 'https://alpha.hifleet.com/hifleetapi/getShipAisNameByMmsis.do?mmsis='+str(mmsi)+'&usertoken=12'
+    token = os.environ.get("SHIP_NAME_API_TOKEN", "")
+    if not token:
+        return None
+    url = ('https://alpha.hifleet.com/hifleetapi/getShipAisNameByMmsis.do'
+           '?mmsis=' + str(mmsi) + '&usertoken=' + token)
     r = requests.get(url)
     dictinfo = json.loads(r.text)
     return dictinfo[0]['name']

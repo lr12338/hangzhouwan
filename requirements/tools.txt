@@ -1,0 +1,6 @@
+# 工具与测试环境（BM1684 工控机当前已满足：numpy / pyyaml / psutil 为系统自带）
+# 本清单用于配置校验、脱敏、静态检查与离线测试，全部为纯 Python，不含 torch/CUDA。
+
+PyYAML==6.0.1                 # YAML 配置解析（系统已装）
+jsonschema==4.23.0            # 期望结果 JSON Schema 校验（可选，测试用）
+pytest==8.3.4                 # 单元/集成测试运行器（可选；当前测试已用 stdlib unittest，可不装）

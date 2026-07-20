@@ -1,49 +1,73 @@
+# -*- coding: utf-8 -*-
+"""
+杭州湾双路船舶检测 · 配置入口（旧版兼容层）。
+
+安全整改说明（阶段1）：
+- 源码中不再保留任何明文生产凭据、推流地址或令牌；
+- RTSP / RTMP 地址一律从环境变量读取，默认为空（禁用）；
+- Windows 绝对路径改为仓库相对路径，可由环境变量覆盖；
+- 算法逻辑（检测 / 坐标 / AIS 关联）未改动。
+
+正式配置请使用 config/application.yaml（见 config/application.example.yaml）。
+"""
+import os
+
 from utils_demo.find_ship import (
     beixia_predict_longitude_latitude,
-    beishang_predict_longitude_latitude
+    beishang_predict_longitude_latitude,
 )
+
+# 资源根目录：默认为本仓库 hangzhouwan_beishang，可由环境变量覆盖
+_BASE_DIR = os.environ.get(
+    "HANGZHOUWAN_BASE_DIR",
+    os.path.dirname(os.path.abspath(__file__)),
+)
+_WEIGHTS_DIR = os.path.join(_BASE_DIR, "weights")
+
+
+def _env(name, default=""):
+    """从环境变量读取，默认空字符串，确保未配置时不连接正式服务。"""
+    return os.environ.get(name, default)
+
 
 STREAM_CONFIGS = {
     "A": {
         "stream_id": "A",
-        "stream_url": "rtsp://admin:Few181818@112.16.184.176:48554/streaming/Channels/801",#高清
-        # "stream_url": "http://open.ys7.com/v3/openlive/FS5533687_8_1.m3u8?expire=1766651274&id=793878039684980736&t=04ee1ce4f559056f4d9cad47c07f948f4a55390c616dfa6f05ac6642c6e7756f&ev=100",#高清
-        # "stream_url": "http://open.ys7.com/v3/openlive/FS5533687_8_2.m3u8?expire=1766651274&id=793878039371984896&t=57922a15105097d2b2221a981ca35d3a179818b8e3efa70f74aeef9cfd2c471e&ev=100",#流畅
-        "rtmp_url": "rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth8_1",
+        "stream_url": _env("STREAM_A_INPUT_URL"),          # 高清
+        "rtmp_url": _env("STREAM_A_OUTPUT_URL"),
         "forbidden_rectangles": [
             ((1480, 0), (2560, 630)),
             ((247, 855), (275, 888)),
-            ((2295, 895), (2315, 927))
+            ((2295, 895), (2315, 927)),
         ],
         "forbidden_polygons": [
-            [(0, 0), (0, 640), (710, 620), (1260, 620), (1260, 0)]
+            [(0, 0), (0, 640), (710, 620), (1260, 620), (1260, 0)],
         ],
         "predict_coord_func": beixia_predict_longitude_latitude,
-        "camera_param": 0.5
+        "camera_param": 0.5,
     },
     "B": {
         "stream_id": "B",
-        "stream_url": "rtsp://admin:Few181818@112.16.184.176:48554/streaming/Channels/301",#高清
-        # "stream_url": "http://open.ys7.com/v3/openlive/FS5533687_3_1.m3u8?expire=1766651012&id=793876943232565248&t=9a6f3793c6225fe7385e4a5e83299860bdaf464eb080db76d554f9a4b3d582e3&ev=100",#高清
-        # "stream_url": "http://open.ys7.com/v3/openlive/FS5533687_3_2.m3u8?expire=1766651012&id=793876942885629952&t=38223391e1aff1a540843c46ae2db1d61d6f710e88f52487ca1b86d1df080a3b&ev=100",#流畅
-        "rtmp_url": "rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth3_1",
+        "stream_url": _env("STREAM_B_INPUT_URL"),          # 高清
+        "rtmp_url": _env("STREAM_B_OUTPUT_URL"),
         "forbidden_rectangles": [
-            ((0, 0), (2560, 210))
+            ((0, 0), (2560, 210)),
         ],
         "forbidden_polygons": [
-            [(2160, 210), (2560, 280), (2560, 210)]
+            [(2160, 210), (2560, 280), (2560, 210)],
         ],
         "predict_coord_func": beishang_predict_longitude_latitude,
-        "camera_param": 0.8
-    }
+        "camera_param": 0.8,
+    },
 }
 
-ffmpeg_path = r"D:\\huangchao\\ffmpeg\\bin\\ffmpeg.exe"
+# FFmpeg 可执行文件：优先环境变量，回退到 PATH 中的 ffmpeg
+ffmpeg_path = os.environ.get("HANGZHOUWAN_FFMPEG_PATH", "ffmpeg")
 
-font_path=r'D:\huangchao\hangzhouwan_beishang\weights\simhei.ttf'
+# 字体与模型路径：仓库相对路径，避免 Windows 绝对路径依赖
+font_path = os.path.join(_WEIGHTS_DIR, "simhei.ttf")
+detector_path = os.path.join(_WEIGHTS_DIR, "best.onnx")
 
-detector_path = r'D:\huangchao\hangzhouwan_beishang\weights\best.onnx'
-
-#预测位置
-beixia_model_path=r'D:\huangchao\hangzhouwan_beishang\weights\0121_random_forest_model.pkl'
-beishang_model_path=r'D:\huangchao\hangzhouwan_beishang\weights\beishang_x-l.pkl'
+# 坐标标定模型路径
+beixia_model_path = os.path.join(_WEIGHTS_DIR, "0121_random_forest_model.pkl")
+beishang_model_path = os.path.join(_WEIGHTS_DIR, "beishang_x-l.pkl")

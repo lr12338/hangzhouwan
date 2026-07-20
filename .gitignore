@@ -1,21 +1,24 @@
-# IDE ±¾µØÅäÖÃÎÄ¼ş
+# ===== IDE / ç¼–è¾‘å™¨ =====
 .idea/
 *.iml
 .vscode/
 
-# Python »º´æÓë±àÒëÎÄ¼ş
+# ===== Python ç¼“å­˜ =====
 __pycache__/
+**__pycache__**/
 *.pyc
 *.pyo
 *.pyd
 
-# ÈÕÖ¾ÓëÁÙÊ±Êä³ö
+# ===== æ—¥å¿—ä¸ä¸´æ—¶æ–‡ä»¶ =====
 *.log
+logs/
+run/
 temp/
 output/
 *.bak
 
-# ¶ş½øÖÆ³ÌĞòÓëÑ¹Ëõ°ü£¨²»½¨Òé´æÈëGit£©
+# ===== Windows å¯æ‰§è¡Œä¸å‹ç¼©åŒ…ï¼ˆä¸è¿›ä»“åº“ï¼‰ =====
 *.exe
 *.dll
 *.zip
@@ -23,13 +26,33 @@ output/
 ffmpeg/
 "nginx 1.7.11.3 Gryphon/"
 
-# Ä£ĞÍ´óÎÄ¼ş£¨½¨ÒéÓÃGit LFS¹ÜÀí£©
+# ===== æ¨¡å‹ä¸åæ ‡æ ‡å®šæ–‡ä»¶ï¼ˆå¤§æ–‡ä»¶ï¼ŒæŒ‰è®¾è®¡ä¸å…¥åº“ï¼‰ =====
 *.pkl
+*.joblib
 *.pt
-*.onnx
 *.pth
+*.onnx
+*.bmodel
 *.bin
 
-# ÏµÍ³À¬»øÎÄ¼ş
+# ===== æ•æ„Ÿæœ¬åœ°é…ç½®ï¼ˆä»…ä¿ç•™ exampleï¼‰ =====
+.env
+config/application.yaml
+config/logging.yaml
+
+# ===== è¿è¡Œæ—¶æ•°æ®ä¸æ„å»ºäº§ç‰© =====
+data/
+build/
+cmake-build-*/
+
+# ===== è™šæ‹Ÿç¯å¢ƒ =====
+.venv/
+venv/
+
+# ===== ç³»ç»Ÿæ–‡ä»¶ =====
 .DS_Store
 Thumbs.db
+
+# è¿è¡Œæ—¶äº§ç‰©ï¼ˆå«å†å²æ—¥å¿—ï¼Œå¯èƒ½åµŒå…¥å‡­æ®ï¼Œä¸å…¥åº“ï¼‰
+hangzhouwan_beishang/output.txt
+hangzhouwan_beishang/error.txt

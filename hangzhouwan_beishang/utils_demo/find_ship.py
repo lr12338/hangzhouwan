@@ -1,10 +1,21 @@
 import numpy as np
 import joblib
 import math
+import os
 import pandas as pd
 # import config
 # 地球半径（千米）
 EARTH_RADIUS = 6371.0
+
+# 坐标模型默认目录：仓库内 weights，可由环境变量 HANGZHOUWAN_BASE_DIR 覆盖。
+# 阶段1整改：移除 Windows 绝对路径依赖，算法逻辑不变。
+_WEIGHTS_DIR = os.path.join(
+    os.environ.get("HANGZHOUWAN_BASE_DIR",
+                   os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "weights")
+
+def _default_model(filename):
+    return os.path.join(_WEIGHTS_DIR, filename)
 
 def haversine(lon1, lat1, lon2, lat2):
     """计算两个经纬度点之间的距离（以千米为单位）"""
@@ -14,7 +25,7 @@ def haversine(lon1, lat1, lon2, lat2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return EARTH_RADIUS * c
 
-def beixia_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangchao\hangzhouwan_beishang\weights\0121_random_forest_model.pkl'):
+def beixia_predict_longitude_latitude(x1, y1, x2, y2, model_path=_default_model("0121_random_forest_model.pkl")):
     """
     通过检测框坐标拟合出经纬度
     :param x1: 检测框左上角 x 坐标
@@ -35,7 +46,7 @@ def beixia_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangchao\
     lon1, lat1 = prediction[0][0], prediction[0][1]
     return lon1, lat1
 
-def beishang_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangchao\hangzhouwan_beishang\weights\beishang_x-l.pkl'):
+def beishang_predict_longitude_latitude(x1, y1, x2, y2, model_path=_default_model("beishang_x-l.pkl")):
     """
     通过检测框坐标拟合出经纬度
     :param x1: 检测框左上角 x 坐标
@@ -57,7 +68,7 @@ def beishang_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangcha
     lon1, lat1 = prediction[0][0], prediction[0][1]
     return lon1, lat1
 
-def nanshang_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangchao\hangzhouwan_beishang\weights\beishang_x-l.pkl'):
+def nanshang_predict_longitude_latitude(x1, y1, x2, y2, model_path=_default_model("beishang_x-l.pkl")):
     """
     通过检测框坐标拟合出经纬度
     :param x1: 检测框左上角 x 坐标
@@ -79,7 +90,7 @@ def nanshang_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangcha
     lon1, lat1 = prediction[0][0], prediction[0][1]
     return lon1, lat1
 
-def nanxia_predict_longitude_latitude(x1, y1, x2, y2, model_path=r'D:\huangchao\hangzhouwan_beishang\weights\beishang_x-l.pkl'):
+def nanxia_predict_longitude_latitude(x1, y1, x2, y2, model_path=_default_model("beishang_x-l.pkl")):
     """
     通过检测框坐标拟合出经纬度
     :param x1: 检测框左上角 x 坐标
@@ -126,7 +137,7 @@ def find_nearest_ship(lon1, lat1, ship_data_dict,matched_mmsi, max_distance=0.5)
     return nearest_ship
 
 # 加载模型
-def predict_center_coordinates(longitude, latitude,model_path='D:\Project\hangzhouwan\weights\center_random_forest_model.pkl'):
+def predict_center_coordinates(longitude, latitude,model_path=_default_model("center_random_forest_model.pkl")):
     """
     基于随机森林模型预测检测框中心坐标。
 

@@ -2,10 +2,8 @@ import cv2
 import numpy as np
 
 
-# 频道：test1
-# token：007eJxTYFjf4ZW/8uvaS4v+Wge7rl7h+G4dn8tTK2Wx1P8suinnapkUGMyNjE2NjNJMTM1Sk0zSDCwSUywsjAwsk1MtklNSEo3Nri7pSG8IZGSw1bvBzMgAgSA+K0NJanGJIQMDAIxZH/Q=
-# APPID：723522f456eb4f08ad88209ce8cdda36
-# APP证书：028be94dd4664d198ef291efc48ad627
+
+# 声网(Agora)凭据已从源码移除（阶段1安全整改），如需启用请通过环境变量注入。
 
 ####区域设置
 # 禁止标注的矩形区域
