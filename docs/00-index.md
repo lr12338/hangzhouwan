@@ -17,6 +17,15 @@
 | 05 | [05-model-and-test-assets-status.md](05-model-and-test-assets-status.md) | 模型与测试资产状态结论（门禁依据） | ✅ 阶段1/2 |
 | 06 | [06-stage2-onnx-audit-and-bmodel.md](06-stage2-onnx-audit-and-bmodel.md) | 阶段2 ONNX 审计与 bmodel 转换准备 | ✅ 阶段2 |
 | - | [credential-rotation-checklist.md](credential-rotation-checklist.md) | 凭据轮换清单（RTSP/MQTT/API Token） | ✅ 阶段1 |
+| 12 | [12-x86-server-check.md](12-x86-server-check.md) | x86 服务器环境检查 | ✅ 阶段2 |
+| 13 | [13-bm1684-f32-conversion-report.md](13-bm1684-f32-conversion-report.md) | BM1684 F32 转换报告 | ✅ 阶段2 |
+| 14 | [14-bm1684-f32-delivery-guide.md](14-bm1684-f32-delivery-guide.md) | BM1684 F32 交付指南 | ✅ 阶段2 |
+| 15 | [15-stage2b-board-model-validation.md](15-stage2b-board-model-validation.md) | 阶段2B 板端模型验证 | ✅ 阶段2B |
+| 16 | [16-stage3-single-image-cpp-poc.md](16-stage3-single-image-cpp-poc.md) | 阶段3 单图 C++ 推理 PoC | ✅ 阶段3 |
+| 17 | [17-stage4-single-video-hardware-pipeline.md](17-stage4-single-video-hardware-pipeline.md) | 阶段4 单路硬件视频管线 | 🔶 阶段4 |
+| 18 | [18-stage4-stability-test.md](18-stage4-stability-test.md) | 阶段4 稳定性测试报告 | 🔶 阶段4 |
+| 19 | [19-stage4-bmcv-performance-optimization.md](19-stage4-bmcv-performance-optimization.md) | 阶段4 BMCV 性能优化报告 | 🔶 阶段4 |
+| 20 | [20-stage4-manual-long-run-guide.md](20-stage4-manual-long-run-guide.md) | 阶段4 人工长时测试指南 | 🔶 阶段4 |
 | - | [AGENT_HANDOFF.md](AGENT_HANDOFF.md) | 其他 Agent 快速接手的提示词 | ✅ |
 
 > 编号 02（目标架构）与阶段0 系统审计见外部参考目录 `/home/linaro/hangzhouwan_src/docs/`（`00-current-system-audit.md`、`02-target-architecture.md`），不随仓库入库。

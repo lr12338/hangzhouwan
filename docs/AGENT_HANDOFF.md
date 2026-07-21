@@ -2,8 +2,8 @@
 
 ## 当前状态：2026-07-21
 
-项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证、单图 C++ 推理 PoC、阶段4 单路硬件视频管线功能。
-2h 稳定性门禁待环境时间执行。
+项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证、单图 C++ 推理 PoC、阶段4 单路硬件视频管线功能与 BMCV 性能优化。
+短时 300s 验证通过（10fps）；30min/2h 长时门禁待人工执行。
 
 ## 已完成
 
@@ -56,7 +56,7 @@ LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
 
 板端 F32 单图推理、后处理和绘框功能已通过。**最终检测框精度仍需与同图 ONNX 基线 JSON 对照**。当前无 x86 基线 JSON。
 
-## 阶段4：单路硬件视频管线（🔶 功能与30min通过，2h 门禁待执行）
+## 阶段4：单路硬件视频管线（🔶 功能通过+300s验证通过，30min/2h 待人工执行）
 
 ```bash
 LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib \
@@ -65,23 +65,32 @@ LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/
   --output artifacts/stage4/output_single_stream.mp4 \
   --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
   --device 0 --decoder h264_bm --encoder h264_bm \
-  --output-fps 10 --inference-fps 5 --queue-size 1 --loop 1
+  --output-fps 10 --inference-fps 5 --queue-size 1 --loop 1 \
+  --preprocess cpu --draw-mode bmcv
 ```
+
+推荐配置 `--preprocess cpu --draw-mode bmcv`：CPU 预处理保证检测正确性，BMCV 绘制消除 sws 往返瓶颈（132ms -> 6ms/帧），输出达 10fps。
 
 稳定性测试：
 ```bash
-./tools/video_inference/stability_test.sh 5    # 5 分钟冒烟
-./tools/video_inference/stability_test.sh 30   # 30 分钟中等
-./tools/video_inference/stability_test.sh 120  # 2 小时最终门禁
+./tools/video_inference/stability_test.sh 10   # 10 秒功能
+./tools/video_inference/stability_test.sh 60   # 60 秒性能
+./tools/video_inference/stability_test.sh 300  # 300 秒短时稳定性
+./tools/video_inference/stability_test.sh 30   # 30 分钟（人工）
+./tools/video_inference/stability_test.sh 120  # 2 小时（人工）
 ```
 
-稳定性测试结果：5min 冒烟 ✅ 通过；30min 中等 ✅ 通过（15min 稳态分析：RSS 24.7MB 零增长、TPU 75M/550M 稳定、输出 ~5fps、P95 ~391ms 无漂移）；2h 最终门禁 ⏳ 待执行。
+稳定性测试结果：
+- 10s 功能 ✅ 通过（CPU+CPU / BMCV+BMCV / BMCV+none 三模式）
+- 60s 性能 ✅ 通过（CPU+BMCV 10.02fps / BMCV+BMCV 10.03fps）
+- 300s 短时稳定性 ✅ 通过（10.003fps，退出码 0，RSS +356KB，P95=150ms 稳定，无残留）
+- 30min 中等 ⏳ 待人工执行（详见 `docs/20-stage4-manual-long-run-guide.md`）
+- 2h 最终门禁 ⏳ 待人工执行
 
 ## 待完成
 
 - 与 x86 ONNX 基线 JSON 进行精度对照
-- 阶段4.1：BMCV/VPP 硬件预处理（解决 CPU 预处理瓶颈，输出 10fps）
-- 阶段4：2h 稳定性门禁真实执行
+- 阶段4：30min/2h 长时稳定性门禁人工执行（详见 `docs/20`）
 - 后续：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
 
 ## 执行红线（始终遵守）

@@ -13,8 +13,9 @@ test.mp4 → h264_bm 硬解 → 容量1丢旧队列 → 间隔推理(复用snaps
 - 硬件解码：Sophon-FFmpeg C API + `h264_bm`（libavcodec）
 - 硬件编码：Sophon-FFmpeg C API + `h264_bm`（libavcodec）
 - 推理：复用阶段3 `BmrtDetector`（模型只加载一次）
-- 颜色转换与缩放：libswscale（SIMD 优化，绕开 CPU `resize_bilinear` 瓶颈）
-- 绘框：复用阶段3 `hzw::Image::draw_rectangle` / `draw_label`
+- 颜色转换：BMCV `storage_convert`（NV12->RGB CSC，约 0.3ms）或 libswscale
+- 缩放：libswscale（BMCV VPP resize 在本板不可用）
+- 绘制：BMCV `draw_rectangle`（约 0.4ms）或 CPU `draw_rectangle` / `draw_label`
 - 队列：容量1、主动丢旧帧、线程安全
 - 结果复用：`DetectionSnapshot` + TTL，过期不绘制
 
@@ -60,6 +61,8 @@ export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon
 | `--loop` | `1` | 循环次数（0=无限） |
 | `--max-seconds` | `0` | 最大运行时长（0=不限） |
 | `--metrics-interval` | `10` | 指标汇总输出间隔（秒） |
+| `--preprocess` | `cpu` | 预处理路径：`cpu`（sws，检测正确）或 `bmcv`（BMCV CSC，性能对比） |
+| `--draw-mode` | `cpu` | 绘制路径：`cpu`（sws 往返）、`bmcv`（BMCV draw_rectangle，推荐）、`none`（不绘制） |
 
 ## 帧率约束
 
@@ -68,3 +71,19 @@ export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon
 ## 信号处理
 
 响应 `SIGINT`（Ctrl+C）与 `SIGTERM`，优雅停止（关闭队列 + 释放资源）。
+
+## BMCV 双路径（阶段4 性能优化）
+
+推荐配置（10fps + 检测正确性）：
+```bash
+./build/single_video_infer ... --preprocess cpu --draw-mode bmcv
+```
+
+| 配置 | fps | 检测正确性 | 说明 |
+|------|-----|-----------|------|
+| `--preprocess cpu --draw-mode bmcv` | ~10 | ✅ 与基线一致 | 推荐：CPU 检测 + BMCV 快速绘制 |
+| `--preprocess bmcv --draw-mode bmcv` | ~10 | ⚠️ IoU 0.94–0.98 | BMCV CSC 系数差异，仅性能对比 |
+| `--preprocess cpu --draw-mode cpu` | ~5 | ✅ | 原始路径（sws 往返瓶颈） |
+| `--preprocess cpu --draw-mode none` | ~10 | ✅ | 不绘制，测纯管线性能 |
+
+详见 `docs/19-stage4-bmcv-performance-optimization.md`。

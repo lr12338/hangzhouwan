@@ -113,7 +113,7 @@ output.mp4
 | 线程 | 职责 | 速率 |
 |------|------|------|
 | decode_loop | 读 packet → h264_bm 解码 → sws/抽帧 → 推送 | 20fps（实时节流） |
-| process_loop | NV12↔RGB、推理、绘框、写回 | ~5fps（CPU 预处理瓶颈） |
+| process_loop | NV12↔RGB/推理/绘框/写回 | ~10fps（BMCV 绘制优化，`--draw-mode bmcv`） |
 | encode_loop | h264_bm 编码、封装输出 | 跟随 process |
 
 BmrtDetector 只创建一次（在 run() 中），所有线程复用。
@@ -176,3 +176,21 @@ export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon
 - **CPU 预处理瓶颈**：当前 sws_scale NV12→RGB 640×640 + NCHW 约 22ms/帧，加上 sws_scale 960×544 转换与绘框开销，总处理约 200ms/帧，制约输出帧率至约 5fps（低于 10fps 目标）
 - **阶段4.1 优化方向**：BMCV/VPP 硬件预处理（NV12 960×544 → 640×640 → BGR/NCHW 直连设备内存，省去 sws_scale + CPU 拷贝）
 - **BM1684 VPU 解码缓冲池**：默认 extra_frame_buffer_num=2 不足以覆盖编码器 11 帧保留，必须经 AVDictionary 设为 ≥20
+
+## BMCV 双路径（阶段4 性能优化）
+
+CLI 选项：
+```
+--preprocess cpu|bmcv   # 预处理路径，默认 cpu
+--draw-mode cpu|bmcv|none  # 绘制路径，默认 cpu
+```
+
+| 路径 | 预处理 | 绘制 | fps | 检测正确性 |
+|------|--------|------|-----|-----------|
+| CPU+CPU（原始） | sws NV12->RGB640 + norm | sws 往返 + CPU 绘框 | ~5 | ✅ 基线 |
+| CPU+BMCV（推荐） | sws NV12->RGB640 + norm | BMCV draw_rectangle | ~10 | ✅ 与基线一致 |
+| BMCV+BMCV（性能） | BMCV CSC + sws resize + norm | BMCV draw_rectangle | ~10 | ⚠️ IoU 0.94–0.98 |
+
+新增文件：`include/video/bmcv_processor.h`、`src/video/bmcv_processor.cpp`、`tools/video_inference/preprocess_compare.cpp`。
+
+300 秒稳定性测试（推荐配置）：10.003fps、退出码 0、RSS +356KB、P95=150ms 稳定、无残留进程。
