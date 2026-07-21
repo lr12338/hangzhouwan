@@ -56,3 +56,11 @@ Thumbs.db
 # 运行时产物（含历史日志，可能嵌入凭据，不入库）
 hangzhouwan_beishang/output.txt
 hangzhouwan_beishang/error.txt
+
+# INT8 校准帧（由 test.mp4 派生，可由脚本再生，不入库）
+testdata/calibration/*.jpg
+testdata/calibration/*.png
+
+# 编译产物（仅提交源码，二进制可再生）
+tools/image_inference/bmrt_load_test
+tools/chip_info/chip_info
