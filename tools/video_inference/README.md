@@ -87,3 +87,39 @@ export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon
 | `--preprocess cpu --draw-mode none` | ~10 | ✅ | 不绘制，测纯管线性能 |
 
 详见 `docs/19-stage4-bmcv-performance-optimization.md`。
+
+## 单路 RTSP 输入（阶段4.2）
+
+`--source-type rtsp` 从 RTSP 实时流读取，复用同一 h264_bm 硬解 -> 推理 -> BMCV 绘框 -> h264_bm 硬编链路，输出本地 MP4/TS。RTSP 模式不做墙钟节流（由网络按真实速率到达）。
+
+**安全**：RTSP URL **必须**经环境变量 `--input-env` 传入，禁止 `--input 'rtsp://user:password@...'`（会进入 shell 历史/进程列表/日志）。日志自动脱敏为 `rtsp://user:***@host`。
+
+```bash
+export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径'   # 板端私下设置，勿写入文件/命令行
+./build/single_video_infer \
+  --source-type rtsp --input-env HZW_TEST_RTSP_URL \
+  --output artifacts/stage4_2/rtsp_out.mp4 \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --device 0 --decoder h264_bm --encoder h264_bm \
+  --rtsp-transport tcp --rtsp-stimeout-us 5000000 --rtsp-max-reconnect -1 \
+  --source-fps 20 --output-fps 10 --inference-fps 5 --queue-size 1 \
+  --preprocess cpu --draw-mode bmcv --max-seconds 60
+```
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--source-type` | `file` | `file` 或 `rtsp` |
+| `--input-env` | - | RTSP 必填：输入 URL 的环境变量名（URL 不入命令行/日志） |
+| `--rtsp-transport` | `tcp` | `tcp` / `udp`（板端 `ffmpeg -h demuxer=rtsp` 实测支持） |
+| `--rtsp-stimeout-us` | `5000000` | socket TCP I/O 超时（微秒），覆盖连接与读取超时 |
+| `--rtsp-max-reconnect` | `-1` | 断线重连次数：`-1`=无限 `0`=不重连 `>0`=上限 |
+| `--rtsp-initial-backoff-ms` | `1000` | 初始退避 |
+| `--rtsp-max-backoff-ms` | `30000` | 指数退避上限 |
+
+特性：
+- 连接/读取超时：`stimeout`（TCP）；无数据到达时 `av_read_frame` 在超时后返回错误触发重连。
+- 受控断线重连：指数退避（封顶 30s），受 `max_reconnect` 约束；重连成功后清除过期检测结果、输出 PTS 保持单调；bmodel 不重新加载。
+- 停止信号中断阻塞：`SIGINT`/`SIGTERM`/限时经中断回调使阻塞的 open/read 返回 `Immediate exit requested`。
+- 初始连接失败不重连（直接退出 3），避免对坏地址无限重连。
+
+详见 `docs/21-stage4-2-single-rtsp-input.md`、`docs/22-stage4-2-manual-rtsp-stability.md`。

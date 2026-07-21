@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+
+> 阶段4.2 在本管线基础上扩展为单路 RTSP 输入（连接/读取超时、受控断线重连、URL 脱敏、PTS 单调），详见 `21-stage4-2-single-rtsp-input.md`。
 # 阶段4：BM1684 单路硬件视频推理管线
 
 ## 目标
@@ -173,8 +175,8 @@ export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon
 
 ## 已知限制
 
-- **CPU 预处理瓶颈**：当前 sws_scale NV12→RGB 640×640 + NCHW 约 22ms/帧，加上 sws_scale 960×544 转换与绘框开销，总处理约 200ms/帧，制约输出帧率至约 5fps（低于 10fps 目标）
-- **阶段4.1 优化方向**：BMCV/VPP 硬件预处理（NV12 960×544 → 640×640 → BGR/NCHW 直连设备内存，省去 sws_scale + CPU 拷贝）
+- **BMCV 绘制优化已完成（阶段4.1，详见 docs/19）**：原 CPU 路径 sws 往返约 132ms/帧，制约输出至约 5fps；采用 `--draw-mode bmcv` 后推荐配置 `--preprocess cpu --draw-mode bmcv` 达到 10fps
+- **BMCV 能力边界（已实测）**：BMCV CSC 与 draw_rectangle 可用并已落地；BMCV VPP resize / yuv_resize / resize 在本板均不可用，resize 仍由 libswscale 完成
 - **BM1684 VPU 解码缓冲池**：默认 extra_frame_buffer_num=2 不足以覆盖编码器 11 帧保留，必须经 AVDictionary 设为 ≥20
 
 ## BMCV 双路径（阶段4 性能优化）

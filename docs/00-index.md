@@ -26,6 +26,8 @@
 | 18 | [18-stage4-stability-test.md](18-stage4-stability-test.md) | 阶段4 稳定性测试报告 | 🔶 阶段4 |
 | 19 | [19-stage4-bmcv-performance-optimization.md](19-stage4-bmcv-performance-optimization.md) | 阶段4 BMCV 性能优化报告 | 🔶 阶段4 |
 | 20 | [20-stage4-manual-long-run-guide.md](20-stage4-manual-long-run-guide.md) | 阶段4 人工长时测试指南 | 🔶 阶段4 |
+| 21 | [21-stage4-2-single-rtsp-input.md](21-stage4-2-single-rtsp-input.md) | 阶段4.2 单路 RTSP 输入到本地文件 | 🔶 阶段4.2 |
+| 22 | [22-stage4-2-manual-rtsp-stability.md](22-stage4-2-manual-rtsp-stability.md) | 阶段4.2 RTSP 人工长时测试指南 | 🔶 阶段4.2 |
 | - | [AGENT_HANDOFF.md](AGENT_HANDOFF.md) | 其他 Agent 快速接手的提示词 | ✅ |
 
 > 编号 02（目标架构）与阶段0 系统审计见外部参考目录 `/home/linaro/hangzhouwan_src/docs/`（`00-current-system-audit.md`、`02-target-architecture.md`），不随仓库入库。
@@ -43,9 +45,9 @@
 
 | 路径 | 用途 |
 |---|---|
-| `tests/run_tests.py` | 测试入口（26 项，纯标准库） |
+| `tests/run_tests.py` | 测试入口（29 项，纯标准库） |
 | `tools/inspect_onnx.py` | ONNX 审计（纯标准库 protobuf 解析） |
-| `tools/redact_secrets.py` | 敏感信息脱敏/扫描 |
+| `tools/redact_secrets.py` | 敏感信息脱敏/扫描（含 `--scan` 仓库扫描） |
 | `tools/validate_config.py` | 配置校验 |
 | `tools/convert_model/README.md` | bmodel 转换说明（x86） |
 | `tools/image_inference/README.md` | 板端 C++ 推理说明 |

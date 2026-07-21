@@ -4,13 +4,13 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-21（阶段4 BMCV 性能优化完成，短时 300s 验证通过，10fps 达标；30min/2h 门禁待人工执行） |
+| 最后更新 | 2026-07-21（阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成；实流/长时待人工；30min/2h 门禁待人工执行） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
-| HEAD | `8e3217e` + 阶段4 未提交修改 |
-| 当前阶段 | **阶段4 本地单路视频功能通过；短时 300s 验证通过；30min/2h 门禁待人工执行** |
-| 总体健康度 | 🟢 阶段3 闭合，阶段4 功能通过+300s 验证通过+10fps；30min/2h 待人工执行 |
+| HEAD | 阶段4.2 已提交（feat `e010a98` + docs）；工作区干净 |
+| 当前阶段（4.2） | **阶段4 本地视频功能+300s 验证通过；阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证通过；实流与 30min/2h 门禁待人工执行** |
+| 总体健康度 | 🟢 阶段3 闭合，阶段4 功能通过+300s+10fps；阶段4.2 RTSP 代码+单测+连接路径验证通过，实流待人工 |
 
 ---
 
@@ -24,6 +24,7 @@
 | 2B | 板端 bmodel 加载与兼容性验证 | ✅ 完成 | bmrt_test + bmrt_load_test 通过 | F32 bmodel SHA256 一致，板端真实加载正常 |
 | 3 | 单图 C++ 推理 PoC | ✅ 完成 | 单图 PoC 通过 | 精度对照待 x86 基线 |
 | 4 | 单路硬件视频管线 PoC | 🔶 功能通过+300s验证通过/30min·2h待人工 | 单路稳定 2h | BMCV 绘制优化达 10fps，300s 通过；30min/2h 待人工执行 |
+| 4.2 | 单路 RTSP 输入到本地文件 | 🔶 代码+单测+连接路径验证通过/实流·长时待人工 | RTSP 实流 2h | 连接超时/重连/脱敏/PTS 单调；实流解码与中途重连、30min/2h 待人工 |
 | 5 | 坐标映射 + AIS 迁移 | ⏳ | 关联不低于旧版 | 待阶段4 |
 | 6 | 双路 Pipeline 整合 | ⏳ | 双路运行 | 待阶段5 |
 | 7 | 生产部署 + 无人值守 | ⏳ | 部署就绪 | 待阶段6 |
@@ -90,7 +91,7 @@
 | 错误场景（3 项） | ✅ 正确错误码和错误信息 |
 | 输出目录自动创建 | ✅ |
 | JSON 可解析 | ✅ |
-| Python 测试（26 项） | ✅ 全部通过 |
+| Python 测试（29 项） | ✅ 全部通过 |
 
 ### 精度
 
@@ -106,6 +107,10 @@
 - [x] 阶段4：单路硬件视频管线 PoC（功能通过）
 - [x] 阶段4 BMCV 性能优化（10fps 达标，300s 验证通过）
 - [ ] 阶段4：30min/2h 长时稳定性门禁人工执行
+- [x] 阶段4.2：单路 RTSP 输入（连接/读取超时、受控重连、URL 脱敏、env 输入、PTS 单调）代码+单元测试
+- [x] 阶段4.2：受控无效地址连接/超时/中断/脱敏路径验证
+- [ ] 阶段4.2：RTSP 实流解码 + 中途断线重连人工验证（见 docs/22）
+- [ ] 阶段4.2：30min/2h RTSP 长时门禁人工执行
 - [ ] 后续阶段：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
 
 > 阶段1 的 B1/B2（三模型缺失）已于阶段2 解除。
@@ -148,17 +153,17 @@
 
 | 测试 | 结果 |
 |---|---|
-| 单元测试（4 项：队列/快照/管线调度/后处理） | ✅ 全部通过 |
+| 单元测试（6 项：队列/快照/管线调度/后处理/RTSP 选项/输出 PTS） | ✅ 全部通过 |
 | 单图基线回归（10 项） | ✅ 全部通过 |
-| Python 测试（26 项） | ✅ 全部通过 |
+| Python 测试（29 项） | ✅ 全部通过 |
 | 10s 短跑（h264_bm 解码+编码+推理+绘框） | ✅ 退出码 0，输出可解码，含检测框 |
 | 5min 冒烟测试 | ✅ 退出码 0，队列≤1，延迟 P95 < 500ms，无内存泄漏 |
-| 30min 中等测试 | ✅ 通过（15min 稳态分析，RSS 零增长，详见 docs/18） |
+| 30min 中等测试 | ⏳ 待人工执行（15min 稳态分析仅为历史参考，不替代完整 1800s 门禁；详见 docs/18、docs/20） |
 | 2h 最终门禁 | ⏳ 提供可执行脚本和指南（`docs/20-stage4-manual-long-run-guide.md`），待人工执行 |
 
 ### 已知限制
 
-- **CPU 预处理瓶颈**：当前 sws_scale NV12→RGB 640×640 + NCHW 约 22ms/帧，加上 sws_scale 960×544 转换与绘框开销，总处理约 200ms/帧，制约输出帧率至约 5fps（低于 10fps 目标）。阶段4.1 优化方向：BMCV/VPP 硬件预处理（NV12 960×544 → 640×640 → BGR/NCHW 直连设备内存）。
+- **BMCV 绘制优化已完成（详见 docs/19）**：原 CPU 路径 sws 往返约 132ms/帧，制约输出至约 5fps；采用 `--draw-mode bmcv`（BMCV draw_rectangle 约 6ms/帧）后，推荐配置 `--preprocess cpu --draw-mode bmcv` 达到 10fps。BMCV VPP resize 在本板不可用，resize 仍由 libswscale 完成；CPU 预处理保留为默认路径（BMCV CSC 与 sws 系数存在差异，检测框 IoU 0.94–0.98 未达门禁）。
 - **解码器警告**：`pkt can't be sent to decoder` 出现在循环 seek 期间，为 BM 视频解码器内部缓冲池回收提示，不影响功能。
 
 ### 回滚方法
@@ -168,3 +173,16 @@
 - CMakeLists.txt 增量添加，可独立 revert。
 - `docs/17`、`docs/18` 独立文档。
 - 回滚单次提交即可恢复至阶段3 基线。
+
+---
+
+## 6. 阶段4.2：单路 RTSP 输入到本地文件（🔶 代码+单测+连接路径验证通过，实流/长时待人工）
+
+详见 `docs/21-stage4-2-single-rtsp-input.md`、`docs/22-stage4-2-manual-rtsp-stability.md`。
+
+- 扩展现有 `SophonVideoSource`：`open_rtsp`（`rtsp_transport`+`stimeout` 经 AVDictionary 传入，参数来自板端 `ffmpeg -h demuxer=rtsp` 实测）、中断回调（`stop_requested_` 使 open/read 可被信号/限时中断）、`read()` 内受控重连（指数退避，封顶，受 `max_reconnect` 约束）、源 epoch。
+- 安全：`--input-env HZW_TEST_RTSP_URL` 环境变量输入，`redact_url_credentials` 脱敏（保留用户名，密码置 `***`），URL 不入命令行/日志/Git。
+- 单调 PTS：`OutputPtsSequence` 按输出帧序严格递增，忽略源 PTS；重连后 `SnapshotStore::clear()` 清除过期检测结果。
+- 单元测试：`test_rtsp_source_options`（脱敏/env/transport/退避增长·封顶·重置）、`test_output_pts`（严格递增+源 PTS 回退不影响）、`test_detection_snapshot`（clear）。`ctest` 8 项 + Python 29 项全通过。
+- 板端验证：20s 文件回归通过（硬件链路未回退）；受控无效地址验证连接超时（`stimeout`）、SIGTERM/SIGINT 中断阻塞（`Immediate exit requested`）、凭据不泄漏、无残留。
+- 限制：板端 Sophon-FFmpeg RTSP muxer 不支持 listen，无可用 RTSP 服务端工具，实流解码与中途断线重连待人工用真实摄像头或用户提供的中继执行。

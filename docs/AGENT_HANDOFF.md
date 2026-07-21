@@ -3,7 +3,7 @@
 ## 当前状态：2026-07-21
 
 项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证、单图 C++ 推理 PoC、阶段4 单路硬件视频管线功能与 BMCV 性能优化。
-短时 300s 验证通过（10fps）；30min/2h 长时门禁待人工执行。
+短时 300s 验证通过（10fps）；30min/2h 长时门禁待人工执行。阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成，实流/长时待人工。
 
 ## 已完成
 
@@ -87,10 +87,37 @@ LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/
 - 30min 中等 ⏳ 待人工执行（详见 `docs/20-stage4-manual-long-run-guide.md`）
 - 2h 最终门禁 ⏳ 待人工执行
 
+## 阶段4.2：单路 RTSP 输入到本地文件（🔶 代码+单测+连接路径验证通过，实流/长时待人工）
+
+扩展 `SophonVideoSource` 支持 RTSP：`open_rtsp`（`rtsp_transport`+`stimeout` 经 AVDictionary，参数来自板端 `ffmpeg -h demuxer=rtsp` 实测）、中断回调（`stop_requested_` 使 open/read 可被信号/限时中断）、`read()` 内受控重连（指数退避，封顶，受 `--rtsp-max-reconnect` 约束）。
+
+安全：`--input-env HZW_TEST_RTSP_URL` 环境变量输入（URL 不入命令行/日志/Git）；`redact_url_credentials` 脱敏（`rtsp://user:***@host`）；提交前 `python3 tools/redact_secrets.py --scan .`。
+
+```bash
+export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径'   # 板端私下设置，勿写入文件
+./build/single_video_infer \
+  --source-type rtsp --input-env HZW_TEST_RTSP_URL \
+  --output artifacts/stage4_2/rtsp_60s.mp4 \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --device 0 --decoder h264_bm --encoder h264_bm \
+  --rtsp-transport tcp --rtsp-stimeout-us 5000000 --rtsp-max-reconnect -1 \
+  --source-fps 20 --output-fps 10 --inference-fps 5 --queue-size 1 \
+  --preprocess cpu --draw-mode bmcv --max-seconds 60
+```
+
+验证状态：
+- `ctest` 8 项 + Python 29 项全通过（新增 `test_rtsp_source_options`、`test_output_pts`、`redact_secrets --scan`）。
+- 20s 本地文件回归通过（硬件链路未回退）。
+- 受控无效地址验证：连接超时（`stimeout`）、SIGTERM/SIGINT 中断阻塞（`Immediate exit requested`）、凭据不泄漏、无残留。
+- 待人工：RTSP 实流解码、中途断线重连、30min/2h 门禁（见 `docs/21`、`docs/22`）。
+
+限制：板端 Sophon-FFmpeg RTSP muxer 不支持 listen，无可用 RTSP 服务端工具，无法自建本地中继自测。
+
 ## 待完成
 
 - 与 x86 ONNX 基线 JSON 进行精度对照
 - 阶段4：30min/2h 长时稳定性门禁人工执行（详见 `docs/20`）
+- 阶段4.2：RTSP 实流解码 + 中途断线重连 + 30min/2h 门禁人工执行（详见 `docs/22`）
 - 后续：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
 
 ## 执行红线（始终遵守）
