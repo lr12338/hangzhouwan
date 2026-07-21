@@ -39,3 +39,20 @@
 - 项目基础（Git 分支、安全配置、中文日志、脱敏、配置校验、离线测试、依赖分类）已完成；
 - 但三个模型文件缺失，**不具备直接进入 bmodel 转换阶段的条件**；
 - 待在 x86 / 原 Windows 机器补齐 `best.onnx` 与两个 `.pkl`，并完成 ONNX 结构审计与坐标模型加载验证后，方可进入 Stage2（ONNX 审计与 bmodel 转换）。
+
+---
+
+## 阶段2 更新（2026-07-21）：模型已补齐
+
+三个模型已补齐至 `weights/`，阶段1“缺失”结论更新为“存在”：
+
+| 资产 | 阶段1状态 | 阶段2状态 |
+|---|---|---|
+| `best.onnx` | 缺失 | **存在·已审计**（见 `docs/06` §3） |
+| `0121_random_forest_model.pkl` | 缺失 | 存在（坐标迁移属阶段5） |
+| `beishang_x-l.pkl` | 缺失 | 存在（坐标迁移属阶段5） |
+
+- ONNX 审计完成：动态输入 `[batch,3,height,width]` 须固化 `[1,3,640,640]`，输出 `output` 不含 NMS；
+- INT8 校准集就绪（63 帧）；x86 转换脚本就绪；板端最小 C++ 加载程序编译并验证 API 链路；
+- bmodel 转换为 x86-only，待 x86 执行 `tools/convert_model/convert_bmodel.sh` 后板端加载/精度验证。
+- 详细结论见 `docs/06-stage2-onnx-audit-and-bmodel.md`。
