@@ -9,7 +9,7 @@
 | 本地路径 | `/home/huangchao/hangzhouwan/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
 | HEAD | `b7a9fbc`（本次文档更新前） |
-| 当前阶段 | **阶段2 F32 转换⛔官方 TPU-MLIR wheel 下载失败** |
+| 当前阶段 | **阶段2 F32 x86 转换与数值验证完成** |
 | 总体健康度 | 🟡 阶段1 闭合，阶段2 未转换 |
 
 ---
@@ -69,7 +69,7 @@
 - [ ] F32 转换：`docker load` 后立即空间曾为 9.4 GB，最终复核为 16 GB；每次重试前须确认至少 10 GB。镜像内未找到 TPU-MLIR 工具或环境脚本，禁止转换
 - [x] 已将 `hangzhouwan_beishang/weights/best.onnx` 校验并复制至受控路径 `weights/best.onnx`，SHA256 为 `101f8e19c680eb4fd2446521f983b11ada35052bce56f30c2ddcf5df64894f92`
 - [x] 已从 `testdata/test.mp4` 生成 `testdata/model_test/frame_000010.jpg`；该文件被 Git 忽略
-- [ ] 官方 `tpu_mlir-1.28.1` wheel 下载失败：164,416,233 / 268,069,531 字节时出现 HTTP/2 `PROTOCOL_ERROR`，需要离线 wheel
+- [x] 官方 `tpu_mlir-1.28.1` wheel 已由用户提供并校验，F32 bmodel 已生成且 x86 数值验证通过
 - [ ] 受控 ONNX：`weights/best.onnx` 缺失。不同路径的 `hangzhouwan_beishang/weights/best.onnx` 不替代受控路径
 - [ ] 数值验证：无测试图片，且主机和容器均无 `ffmpeg`，未生成参考输出或 bmodel 输出
 - [ ] F32 交付包：未生成；未复制至板端
@@ -87,7 +87,6 @@
 ### 阻塞（须外部输入才能解除）
 | ID | 阻塞项 | 影响阶段 | 解除条件 | 负责方 |
 |---|---|---|---|---|
-| B3 | 官方 `tpu_mlir` wheel 下载失败 | 阶段2 | 提供与 Python 3.10 / Ubuntu 22.04 兼容的官方离线 wheel | 用户/运维 |
 | B4 | 容器导入期间空间读数曾为 9.4 GB（最终复核 16 GB） | 阶段2 | 每次转换前复核至少 10 GB 可用空间 | 用户/运维 |
 | B5 | 仓库历史含真实凭据（public） | 运维 | 按 `credential-rotation-checklist.md` 轮换凭据 | 用户/运维 |
 | B6 | `weights/best.onnx` 缺失 | 阶段2 | 用户手动复制 ONNX 至受控路径 | 用户 |

@@ -15,7 +15,7 @@ d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac
 ## 现有阻塞
 
 1. `docker load` 后立即根分区可用空间曾为 9.4 GB，最终复核为 16 GB；每次转换开始前仍须确认至少保留 10 GB。
-2. 官方 PyPI `tpu_mlir-1.28.1` wheel 下载失败。分段下载在 164,416,233 / 268,069,531 字节时返回 HTTP/2 `PROTOCOL_ERROR`；须提供官方离线 wheel。
+2. 用户提供的官方 `tpu_mlir-1.28.1` wheel 已校验并安装；`model_transform.py`、`model_deploy.py`、`model_runner.py`、`npz_tool.py` 和 `model_tool` 均可用。
 3. 受控模型 `weights/best.onnx` 已从旧路径校验后复制，SHA256 为 `101f8e19c680eb4fd2446521f983b11ada35052bce56f30c2ddcf5df64894f92`。
 4. 已有测试图片 `testdata/model_test/frame_000010.jpg`，由本地测试视频通过容器 OpenCV 生成。
 
