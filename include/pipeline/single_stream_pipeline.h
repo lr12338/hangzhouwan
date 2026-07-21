@@ -22,6 +22,7 @@
 #include "monitoring/pipeline_metrics.h"
 #include "pipeline/detection_snapshot.h"
 #include "video/latest_frame_queue.h"
+#include "video/bmcv_processor.h"
 #include "video/video_sink.h"
 #include "video/video_source.h"
 
@@ -46,6 +47,8 @@ struct PipelineConfig {
   int loop = 1;            // 0 = 无限循环
   int max_seconds = 0;     // 0 = 不限时（由 loop/信号控制）
   int metrics_interval_sec = 10;
+  std::string preprocess = "cpu";   // cpu | bmcv
+  std::string draw_mode = "cpu";    // cpu | bmcv | none
   // 校验配置合法性；返回 false 时 err 给出原因。
   bool validate(std::string& err) const;
 };
@@ -75,6 +78,7 @@ class SingleStreamPipeline {
   std::unique_ptr<BmrtDetector> detector_;
   SnapshotStore snapshot_;
   PipelineMetrics metrics_;
+  BmcvProcessor bmcv_;
 
   using FrameQueue = LatestFrameQueue<VideoFrame>;
   std::unique_ptr<FrameQueue> q_decode_;   // 解码 -> 处理

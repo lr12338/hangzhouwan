@@ -54,6 +54,8 @@ struct Args {
   int loop = 1;
   int max_seconds = 0;
   int metrics_interval_sec = 10;
+  std::string preprocess = "cpu";
+  std::string draw_mode = "cpu";
   bool help = false;
 };
 
@@ -84,6 +86,8 @@ bool parse(int argc, char** argv, Args& a, std::string& err) {
     else if (k == "--loop") { v = get(k.c_str(), i); if (!v) return false; a.loop = std::atoi(v); }
     else if (k == "--max-seconds") { v = get(k.c_str(), i); if (!v) return false; a.max_seconds = std::atoi(v); }
     else if (k == "--metrics-interval") { v = get(k.c_str(), i); if (!v) return false; a.metrics_interval_sec = std::atoi(v); }
+    else if (k == "--preprocess") { v = get(k.c_str(), i); if (v) a.preprocess = v; else return false; }
+    else if (k == "--draw-mode") { v = get(k.c_str(), i); if (v) a.draw_mode = v; else return false; }
     else { err = "未知参数: " + k; return false; }
   }
   return true;
@@ -96,7 +100,8 @@ void usage() {
       "  --source-fps 20 --output-fps 10 --inference-fps 5\n"
       "  --bitrate-kbps 800 --gop 20 --queue-size 1\n"
       "  --conf 0.1 --iou 0.1 --result-ttl-ms 1000\n"
-      "  --loop 1 (0=无限) --max-seconds 0 (0=不限时) --metrics-interval 10\n");
+      "  --loop 1 (0=无限) --max-seconds 0 (0=不限时) --metrics-interval 10\n"
+      "  --preprocess cpu|bmcv --draw-mode cpu|bmcv|none\n");
 }
 }  // namespace
 
@@ -143,6 +148,8 @@ int main(int argc, char** argv) {
   cfg.loop = a.loop;
   cfg.max_seconds = a.max_seconds;
   cfg.metrics_interval_sec = a.metrics_interval_sec;
+  cfg.preprocess = a.preprocess;
+  cfg.draw_mode = a.draw_mode;
 
   ensure_dir(cfg.output_path);
 

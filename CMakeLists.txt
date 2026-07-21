@@ -36,7 +36,7 @@ add_library(bmrt_runtime INTERFACE IMPORTED)
 set_target_properties(bmrt_runtime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${LIBSOPHON_INCLUDE}"
   INTERFACE_LINK_DIRECTORIES "${LIBSOPHON_LIB}")
-target_link_libraries(bmrt_runtime INTERFACE bmrt bmlib pthread dl)
+target_link_libraries(bmrt_runtime INTERFACE bmrt bmlib bmcv pthread dl)
 
 # Sophon-FFmpeg（avformat/avcodec/swscale/avutil，C++ 需 extern "C" 包裹头文件）
 add_library(sophon_ffmpeg INTERFACE IMPORTED)
@@ -53,6 +53,7 @@ add_library(hzw_inf STATIC
   src/util/sha256.cpp
   src/video/sophon_ffmpeg_source.cpp
   src/video/sophon_ffmpeg_sink.cpp
+  src/video/bmcv_processor.cpp
   src/monitoring/pipeline_metrics.cpp
   src/pipeline/single_stream_pipeline.cpp)
 target_include_directories(hzw_inf PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
@@ -65,6 +66,10 @@ target_link_libraries(single_image_infer PRIVATE hzw_inf)
 # 阶段4 单路视频硬件推理
 add_executable(single_video_infer tools/video_inference/single_video_infer.cpp)
 target_link_libraries(single_video_infer PRIVATE hzw_inf)
+
+# CPU/BMCV 预处理正确性对照工具
+add_executable(preprocess_compare tools/video_inference/preprocess_compare.cpp)
+target_link_libraries(preprocess_compare PRIVATE hzw_inf)
 
 # YOLOv7 后处理单元测试
 enable_testing()
@@ -84,6 +89,14 @@ add_test(NAME detection_snapshot COMMAND test_detection_snapshot)
 add_executable(test_pipeline_timing tests/unit_cpp/test_pipeline_timing.cpp)
 target_link_libraries(test_pipeline_timing PRIVATE hzw_inf)
 add_test(NAME pipeline_timing COMMAND test_pipeline_timing)
+
+# 阶段4 BMCV 预处理/绘制单元测试（需 BM1684 硬件）
+add_executable(test_bmcv_processor tests/unit_cpp/test_bmcv_processor.cpp)
+target_link_libraries(test_bmcv_processor PRIVATE hzw_inf)
+add_test(NAME bmcv_processor COMMAND test_bmcv_processor)
+
+# 稳定性测试脚本行为验证
+add_test(NAME stability_script COMMAND bash ${CMAKE_SOURCE_DIR}/tests/test_stability_script.sh)
 
 # 阶段2 门禁：最小 BMRuntime 加载验证
 add_executable(bmrt_load_test tools/image_inference/bmrt_load_test.cpp)

@@ -155,6 +155,8 @@ int BmrtDetector::output_element_count() const {
   return static_cast<int>(n);
 }
 
+void* BmrtDetector::handle() const { return (p_ && p_->ready) ? static_cast<void*>(p_->handle) : nullptr; }
+
 bool BmrtDetector::infer(const std::vector<float>& input,
                          std::vector<float>& output) {
   if (!ok()) {

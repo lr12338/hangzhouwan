@@ -44,6 +44,10 @@ class BmrtDetector {
   // 返回 false 时 last_error() 给出原因。
   bool infer(const std::vector<float>& input, std::vector<float>& output);
 
+  // 返回已打开的 BM 设备句柄（bm_handle_t，以 void* 暴露避免头文件耦合）。
+  // 用于复用同一设备做 BMCV 预处理/绘制；未就绪时返回 nullptr。
+  void* handle() const;
+
  private:
   struct Impl;
   Impl* p_;

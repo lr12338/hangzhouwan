@@ -20,21 +20,24 @@ int64_t now_ms() {
 double ms_between(int64_t a, int64_t b) { return static_cast<double>(b - a); }
 
 // 预处理：RGB 640x640 Image -> NCHW FLOAT32 [1,3,640,640]（与单图基线语义一致）。
-// 优化：跳过 CPU resize_bilinear（54.6ms 瓶颈），改用 sws_scale 直接将 NV12 960x544
-// 缩放为 RGB 640x640（SIMD 优化，约 10ms），此处仅做 HWC->CHW + /255。
+// 优化：单次遍历直接指针访问 + 行主序写 NCHW（原三次遍历+pixel()边界检查约 22ms，
+// 优化后约 7ms）。板端 libswscale 无 SIMD，此函数仍优于 BMCV convert_to（后者不支持
+// RGB_PACKED 且含额外 H2D/D2H 开销）。
 bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
                             std::vector<float>& out) {
   if (rgb.width != input_w || rgb.height != input_h) return false;
-  const int C = Image::channels;
-  out.assign(static_cast<size_t>(C) * input_w * input_h, 0.0f);
-  for (int c = 0; c < C; ++c) {
-    float* plane = out.data() + static_cast<size_t>(c) * input_w * input_h;
-    for (int y = 0; y < input_h; ++y) {
-      for (int x = 0; x < input_w; ++x) {
-        const uint8_t* px = rgb.pixel(x, y);
-        plane[y * input_w + x] = static_cast<float>(px[c]) / 255.0f;
-      }
-    }
+  const int plane = input_w * input_h;
+  out.assign(static_cast<size_t>(3) * plane, 0.0f);
+  const float inv = 1.0f / 255.0f;
+  float* rp = out.data();
+  float* gp = out.data() + plane;
+  float* bp = out.data() + 2 * plane;
+  const uint8_t* p = rgb.data.data();
+  for (int i = 0; i < plane; ++i) {
+    rp[i] = static_cast<float>(p[0]) * inv;
+    gp[i] = static_cast<float>(p[1]) * inv;
+    bp[i] = static_cast<float>(p[2]) * inv;
+    p += 3;
   }
   return true;
 }
@@ -60,6 +63,12 @@ bool PipelineConfig::validate(std::string& err) const {
   if (gop <= 0) { err = "gop 非法"; return false; }
   if (result_ttl_ms < 0) { err = "result_ttl_ms 非法"; return false; }
   if (device < 0) { err = "device 非法"; return false; }
+  if (preprocess != "cpu" && preprocess != "bmcv") {
+    err = "preprocess 必须为 cpu 或 bmcv"; return false;
+  }
+  if (draw_mode != "cpu" && draw_mode != "bmcv" && draw_mode != "none") {
+    err = "draw_mode 必须为 cpu、bmcv 或 none"; return false;
+  }
   return true;
 }
 
@@ -114,6 +123,22 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
                detector_->net_name().c_str(), detector_->input_name().c_str(),
                detector_->output_name().c_str());
   std::fflush(stdout);
+
+  // BMCV 预处理/绘制初始化（复用 detector 的设备句柄，避免二次打开设备）。
+  // 仅在 preprocess=bmcv 或 draw_mode=bmcv 时初始化；失败则回退 CPU 路径。
+  bool want_bmcv = (cfg_.preprocess == "bmcv" || cfg_.draw_mode == "bmcv");
+  if (want_bmcv) {
+    std::string berr;
+    if (bmcv_.init(detector_->handle(), source_w_, source_h_, berr)) {
+      std::fprintf(stdout, "信息 | BMCV | 初始化成功 预处理=%s 绘制=%s\n",
+                   cfg_.preprocess.c_str(), cfg_.draw_mode.c_str());
+    } else {
+      std::fprintf(stdout, "信息 | BMCV | 初始化失败(%s)，回退 CPU 路径\n", berr.c_str());
+      cfg_.preprocess = "cpu";
+      cfg_.draw_mode = (cfg_.draw_mode == "bmcv") ? "cpu" : cfg_.draw_mode;
+    }
+    std::fflush(stdout);
+  }
 
   if (!sink_.open(cfg_.output_path, source_w_, source_h_, cfg_.output_fps,
                   cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder, err)) {
@@ -191,26 +216,44 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
 void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   const int infer_step = cfg.source_fps / cfg.inference_fps;
   const int input_size = 640;
-  // sws 上下文：
-  //   nv12_to_rgb   ：NV12(960x544) -> RGB(960x544) 用于绘框
-  //   nv12_to_rgb640：NV12(960x544) -> RGB(640x640) 用于推理（SIMD 缩放，省去 CPU resize）
-  //   rgb_to_nv12   ：RGB(960x544) -> NV12(960x544) 用于 in-place 写回编码
-  SwsContext* nv12_to_rgb = sws_getContext(
-      source_w_, source_h_, AV_PIX_FMT_NV12,
-      source_w_, source_h_, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
-  SwsContext* nv12_to_rgb640 = sws_getContext(
-      source_w_, source_h_, AV_PIX_FMT_NV12,
-      640, 640, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
-  SwsContext* rgb_to_nv12 = sws_getContext(
-      source_w_, source_h_, AV_PIX_FMT_RGB24,
-      source_w_, source_h_, AV_PIX_FMT_NV12, SWS_BILINEAR, nullptr, nullptr, nullptr);
-  Image rgb;          // 960x544 RGB，用于绘框
-  rgb.width = source_w_; rgb.height = source_h_;
-  rgb.data.assign(static_cast<size_t>(source_w_) * source_h_ * 3, 0);
-  Image rgb640;       // 640x640 RGB，用于推理输入
-  rgb640.width = 640; rgb640.height = 640;
-  rgb640.data.assign(static_cast<size_t>(640) * 640 * 3, 0);
+  const bool cpu_draw = (cfg.draw_mode == "cpu");
+  const bool bmcv_draw = (cfg.draw_mode == "bmcv");
+  const bool cpu_pre = (cfg.preprocess == "cpu");
+  const bool bmcv_pre = (cfg.preprocess == "bmcv" && bmcv_.ready());
+
+  // sws 上下文按需创建：
+  //   nv12_to_rgb   / rgb_to_nv12 ：仅 CPU 绘制路径需要（NV12<->RGB 往返）。
+  //   nv12_to_rgb640              ：仅 CPU 预处理路径需要（NV12->RGB640 缩放）。
+  // BMCV 路径不创建 sws 上下文（CSC 由 BMCV storage_convert 完成，绘制由 BMCV draw_rectangle 完成）。
+  SwsContext* nv12_to_rgb = nullptr;
+  SwsContext* rgb_to_nv12 = nullptr;
+  SwsContext* nv12_to_rgb640 = nullptr;
+  if (cpu_draw) {
+    nv12_to_rgb = sws_getContext(
+        source_w_, source_h_, AV_PIX_FMT_NV12,
+        source_w_, source_h_, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    rgb_to_nv12 = sws_getContext(
+        source_w_, source_h_, AV_PIX_FMT_RGB24,
+        source_w_, source_h_, AV_PIX_FMT_NV12, SWS_BILINEAR, nullptr, nullptr, nullptr);
+  }
+  if (cpu_pre) {
+    nv12_to_rgb640 = sws_getContext(
+        source_w_, source_h_, AV_PIX_FMT_NV12,
+        640, 640, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+  }
+
+  Image rgb;          // 960x544 RGB，仅 CPU 绘制路径使用
+  if (cpu_draw) {
+    rgb.width = source_w_; rgb.height = source_h_;
+    rgb.data.assign(static_cast<size_t>(source_w_) * source_h_ * 3, 0);
+  }
+  Image rgb640;       // 640x640 RGB，仅 CPU 预处理路径使用
+  if (cpu_pre) {
+    rgb640.width = 640; rgb640.height = 640;
+    rgb640.data.assign(static_cast<size_t>(640) * 640 * 3, 0);
+  }
   std::vector<float> input, output;
+  std::string berr;
 
   const int num_boxes = detector_->output_shape().size() >= 2 ? detector_->output_shape()[1] : 25200;
   const int num_vals = detector_->output_shape().size() >= 3 ? detector_->output_shape()[2] : 6;
@@ -221,21 +264,26 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     const int64_t proc_start = now_ms();
     AVFrame* f = vf.frame;
 
-    // NV12 -> RGB(960x544) 用于绘框
-    const uint8_t* src[2] = {f->data[0], f->data[1]};
-    const int src_stride[2] = {f->linesize[0], f->linesize[1]};
-    uint8_t* dst960[1] = {rgb.data.data()};
-    const int dst_stride960[1] = {source_w_ * 3};
-    sws_scale(nv12_to_rgb, src, src_stride, 0, source_h_, dst960, dst_stride960);
-
     const bool is_infer = (vf.sequence % infer_step == 0);
     if (is_infer) {
-      // NV12 -> RGB(640x640) SIMD 缩放，跳过 CPU resize_bilinear
-      uint8_t* dst640[1] = {rgb640.data.data()};
-      const int dst_stride640[1] = {640 * 3};
-      sws_scale(nv12_to_rgb640, src, src_stride, 0, source_h_, dst640, dst_stride640);
       int64_t t0 = now_ms();
-      if (preprocess_rgb_to_nchw(rgb640, input_size, input_size, input)) {
+      bool pre_ok = false;
+      if (bmcv_pre) {
+        input.assign(static_cast<size_t>(detector_->input_element_count()), 0.0f);
+        pre_ok = bmcv_.preprocess(f, input.data(), berr);
+        if (!pre_ok) {
+          set_error(9, "BMCV 预处理失败: " + berr);
+        }
+      } else {
+        // CPU 预处理：NV12 -> RGB(640x640) sws 缩放 + 归一化
+        const uint8_t* src[2] = {f->data[0], f->data[1]};
+        const int src_stride[2] = {f->linesize[0], f->linesize[1]};
+        uint8_t* dst640[1] = {rgb640.data.data()};
+        const int dst_stride640[1] = {640 * 3};
+        sws_scale(nv12_to_rgb640, src, src_stride, 0, source_h_, dst640, dst_stride640);
+        pre_ok = preprocess_rgb_to_nchw(rgb640, input_size, input_size, input);
+      }
+      if (pre_ok) {
         int64_t t1 = now_ms();
         if (detector_->infer(input, output)) {
           int64_t t2 = now_ms();
@@ -262,23 +310,36 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
 
     // 绘框：复用最近 snapshot，过期则不绘制。
     DetectionSnapshot snap = snapshot_.get();
-    if (!snap.expired(proc_start, cfg.result_ttl_ms)) {
-      for (const auto& d : snap.detections) {
-        Color c{0, 255, 0};
-        draw_rectangle(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1),
-                       static_cast<int>(d.x2), static_cast<int>(d.y2), c, 2);
-        char label[32];
-        std::snprintf(label, sizeof(label), "ship %.2f", d.score);
-        draw_label(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1), label, c, 2);
+    const bool has_draw = !snap.expired(proc_start, cfg.result_ttl_ms) && !snap.detections.empty();
+    if (cpu_draw) {
+      // CPU 绘制：NV12 -> RGB -> 绘框 -> RGB -> NV12（往返约 132ms，板端 sws 无 SIMD）
+      const uint8_t* src[2] = {f->data[0], f->data[1]};
+      const int src_stride[2] = {f->linesize[0], f->linesize[1]};
+      uint8_t* dst960[1] = {rgb.data.data()};
+      const int dst_stride960[1] = {source_w_ * 3};
+      sws_scale(nv12_to_rgb, src, src_stride, 0, source_h_, dst960, dst_stride960);
+      if (has_draw) {
+        for (const auto& d : snap.detections) {
+          Color c{0, 255, 0};
+          draw_rectangle(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1),
+                         static_cast<int>(d.x2), static_cast<int>(d.y2), c, 2);
+          char label[32];
+          std::snprintf(label, sizeof(label), "ship %.2f", d.score);
+          draw_label(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1), label, c, 2);
+        }
+      }
+      const uint8_t* s2[1] = {rgb.data.data()};
+      const int s2_stride[1] = {source_w_ * 3};
+      uint8_t* d2[2] = {f->data[0], f->data[1]};
+      const int d2_stride[2] = {f->linesize[0], f->linesize[1]};
+      sws_scale(rgb_to_nv12, s2, s2_stride, 0, source_h_, d2, d2_stride);
+    } else if (bmcv_draw && has_draw) {
+      // BMCV 绘制：直接在 NV12 bm_image 上绘制矩形（H2D+draw+D2H 约 6ms）
+      if (!bmcv_.draw_rectangles(f, snap.detections, berr)) {
+        set_error(10, "BMCV 绘制失败: " + berr);
       }
     }
-
-    // RGB -> NV12（in-place 写回解码帧 bm_image，编码器可见）
-    const uint8_t* s2[1] = {rgb.data.data()};
-    const int s2_stride[1] = {source_w_ * 3};
-    uint8_t* d2[2] = {f->data[0], f->data[1]};
-    const int d2_stride[2] = {f->linesize[0], f->linesize[1]};
-    sws_scale(rgb_to_nv12, s2, s2_stride, 0, source_h_, d2, d2_stride);
+    // draw_mode == "none"：跳过绘制
 
     const int64_t e2e = now_ms() - vf.capture_time_ms;
     metrics_.record_e2e_ms(static_cast<double>(e2e));
@@ -292,7 +353,6 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   if (nv12_to_rgb640) sws_freeContext(nv12_to_rgb640);
   if (rgb_to_nv12) sws_freeContext(rgb_to_nv12);
 }
-
 void SingleStreamPipeline::encode_loop(const PipelineConfig& cfg) {
   VideoFrame vf;
   std::string err;
