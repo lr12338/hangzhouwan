@@ -6,12 +6,12 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="${MODE:-f32}"
 MODEL_NAME="${MODEL_NAME:-yolov7_ship}"
-ONNX="${ONNX:-${PROJECT_ROOT}/hangzhouwan_beishang/weights/best.onnx}"
+ONNX="${ONNX:-${PROJECT_ROOT}/weights/best.onnx}"
 CALIB_DIR="${CALIB_DIR:-${PROJECT_ROOT}/testdata/calibration}"
 INPUT_SHAPES='[[1,3,640,640]]'
 INPUT_NAME='images'
 OUTPUT_NAME='output'
-PROCESSOR='BM1684'
+PROCESSOR='bm1684'
 
 case "$MODE" in
   f32)
@@ -95,6 +95,7 @@ fi
 MLIR_FILE="${WORK_DIR}/${MODEL_NAME}.mlir"
 INPUT_NPZ="${WORK_DIR}/${MODEL_NAME}_in_f32.npz"
 REFERENCE_NPZ="${WORK_DIR}/${MODEL_NAME}_top_outputs.npz"
+GENERATED_INPUT_NPZ="${PROJECT_ROOT}/${MODEL_NAME}_in_f32.npz"
 
 # 预处理与旧 detector.py 一致；模型输入仍为 FLOAT，C++ 侧也须同样完成 RGB/resize/1/255。
 run_logged 转换 model_transform.py \
@@ -108,6 +109,10 @@ run_logged 转换 model_transform.py \
   --test_input "$TEST_IMAGE" \
   --test_result "$REFERENCE_NPZ" \
   --mlir "$MLIR_FILE"
+
+if [[ -s "$GENERATED_INPUT_NPZ" ]]; then
+  mv "$GENERATED_INPUT_NPZ" "$INPUT_NPZ"
+fi
 
 if [[ ! -s "$MLIR_FILE" || ! -s "$INPUT_NPZ" || ! -s "$REFERENCE_NPZ" ]]; then
   log 错误 转换 "MLIR 或 ONNX 参考输出生成失败，停止。"

@@ -33,6 +33,10 @@ ffmpeg/
 *.pth
 *.onnx
 *.bmodel
+artifacts/
+testdata/model_test/
+yolov7_ship*
+_0.dat
 *.bin
 
 # ===== 敏感本地配置（仅保留 example） =====

@@ -39,4 +39,16 @@
 2. 补充含 TPU-MLIR 工具和官方环境脚本的镜像，或提供镜像内的官方安装说明和 wheel。
 3. 手动将 `best.onnx` 放到 `weights/best.onnx`，并提供一张 JPG/JPEG/PNG 测试图片。
 
-最终结论：**镜像内 TPU-MLIR 工具不可用，需补充官方环境。**
+## 2026-07-21 官方 wheel 与 F32 验证结果
+
+已创建持久容器 `tpu-mlir-bm1684`，并按 PyPI 中 TPU-MLIR Team 发布的 `tpu_mlir-1.28.1` 尝试安装。直接 `pip install --no-cache-dir tpu_mlir` 未完成；随后仅使用同一 PyPI 官方 wheel 地址进行 HTTP Range 分段下载，并以发布元数据 SHA256 `ac1c9905d18acaf25fa14eaeb54d829a4b51a59d76dde388d7bae8e13d81e03b` 为校验基线。
+
+容器直连下载曾在 164,416,233 / 268,069,531 字节时失败，多个分段返回：
+
+```text
+curl: (92) HTTP/2 stream 0 was not closed cleanly: PROTOCOL_ERROR (err 1)
+```
+
+用户随后提供官方 wheel；其 SHA256 `28f45f878b32f3f328a09f06cc5b14a0d1b8c35169aa09f05d7dc363ee06b4c8` 与 PyPI 元数据一致。已离线安装 `tpu_mlir 1.28.1`，并用 `bm1684` / `F32` 生成 `yolov7_ship_1684_f32.bmodel`（24,428,544 字节，SHA256 `d1c295c504888541c27e20fda500976725b9d13b6ef5c91842f247f52c31cfcd`）。`model_tool` 确认 BM1684、`images [1,3,640,640]`、`output_Concat [1,25200,6]`。转换日志记录 ONNX/MLIR 172/172 通过，bmodel cmodel 比较通过。
+
+最终结论：**tpu_mlir wheel安装成功，F32 bmodel生成并通过x86数值验证。**
