@@ -1,24 +1,22 @@
 # 12 · x86 服务器关键检查
 
-检查时间：2026-07-21。仅检查 BM1684 F32 bmodel 转换所需的主机、Docker 和空间条件。
+检查时间：2026-07-21。检查范围仅限 BM1684 F32 bmodel 转换的离线镜像、主机空间和模型资产；未执行转换、INT8 或板端操作。
 
 | 项目 | 实测 | 结论 |
 |---|---|---|
-| 架构 | `x86_64` | 通过 |
-| 系统 | Ubuntu 22.04.5 LTS | 通过 |
-| 内存 | 15 GiB 总计，13 GiB 可用 | 通过 |
-| 根分区 | ext4，25 GiB 可用 | 临界，拉取前须复查 |
-| Docker | 29.1.3，服务端可由主机权限访问 | 通过 |
-| Docker 存储 | `overlay2`，`/var/lib/docker` | 已记录 |
-| Docker 已用空间 | 镜像 1.699 GB，可回收 902.3 MB | 未清理任何资源 |
-| 待重启标记 | `/var/run/reboot-required` 存在 | 暂不重启 |
+| 离线归档 | `/home/huangchao/tpu-mlir-offline/tpuc_dev_v3.4.tar.gz`，2,124,689,249 字节 | 已校验 |
+| 归档 SHA256 | `d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac` | 与本次任务给出的本地完整性基线一致；不是官方公布校验值的声明 |
+| 导入镜像 | `sophgo/tpuc_dev:v3.4`，本地别名 `local/tpuc_dev:v3.4` | 导入成功 |
+| 镜像 ID / 大小 | `sha256:d73afc9614a7e78e69dca61a9b7ac84ee9598c942571ea557c603850c5df59a1` / 7.14 GB | 已记录 |
+| 镜像属性 | `amd64` / `linux`，创建时间 `2025-04-11T13:11:38.79942532Z` | 通过 |
+| 导入后根分区可用空间 | `docker load` 结束后立即观测为 9.4 GB；复核时为 16 GB | 曾低于下限；当前恢复到下限以上，后续执行前仍须复核 |
+| 容器工具 | 未找到 `model_transform.py`、`model_deploy.py`、`model_runner.py`、`npz_tool.py`、`model_tool` 或 `envsetup.sh` | 工具链不可用 |
+| 模型资产 | `weights/best.onnx` 不存在；发现不同路径的 `hangzhouwan_beishang/weights/best.onnx`（24,133,596 字节） | 不满足本次受控输入路径 |
+| 测试图片 | 未找到 JPG/JPEG/PNG；仅有 `testdata/test.mp4` | 不满足验证输入条件 |
+| 抽帧工具 | 主机和容器均未找到 `ffmpeg` / `ffprobe` | 未安装额外依赖 |
 
 ## 结论
 
-当前内存足够。根分区仅有 25 GiB，无法在未知官方镜像层大小的情况下承诺空间足够；必须在取得精确镜像 digest 后再次执行 `df -h /` 和 `docker system df`。
+离线镜像文件完整且 Docker 导入成功。`docker load` 刚结束时可用空间曾为 9.4 GB，之后复核为 16 GB；任何后续转换开始前都必须再次确认至少保留 10 GB。镜像中未发现 TPU-MLIR 转换、运行、比较或模型查看工具，以及可加载这些工具的环境脚本。受控路径 `weights/best.onnx` 与测试图片都不存在。
 
-系统有待重启标记，但尚未证明它是 Docker 或转换的必要条件。为避免中断未知 SSH 会话和其他任务，本次未执行重启；实际转换前应由服务器管理者确认 SSH、网络恢复路径和无关键运行任务后再受控重启。
-
-Docker Registry 连通性实测失败：访问 `https://registry-1.docker.io/v2/` 超时。因此尚未拉取镜像、未运行容器、未删除 Docker 资源。
-
-所有本次运行日志使用：`时间 | 级别 | 模块 | 消息`。
+因此本次没有运行 `model_transform.py`、`model_deploy.py`、`model_runner.py`、INT8、板端加载或网络流。未删除任何 Docker 镜像或执行 Docker 清理。

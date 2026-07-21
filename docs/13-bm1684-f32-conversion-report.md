@@ -1,39 +1,42 @@
 # 13 · BM1684 F32 bmodel 转换报告
 
-检查时间：2026-07-21。
+检查时间：2026-07-21。目标芯片固定为 BM1684（`chipid=0x1684`），不是 BM1684X；本次只允许 F32，未执行 FP16、INT8、板端加载或交付复制。
 
-## 已确认输入
+## 已完成的离线检查
 
-| 项目 | 值 |
+| 项目 | 实测值 |
 |---|---|
-| 分支 | `feat/bm1684-edge-deployment` |
-| ONNX | `hangzhouwan_beishang/weights/best.onnx` |
-| ONNX SHA256 | `101f8e19c680eb4fd2446521f983b11ada35052bce56f30c2ddcf5df64894f92` |
-| 输入 | `images`，FLOAT，原始动态 `[batch,3,height,width]` |
-| 转换输入 | `[1,3,640,640]` |
-| 输出 | `output`，无内置 NMS |
-| 目标 | `BM1684`，F32 |
+| 分支 / HEAD | `feat/bm1684-edge-deployment` / `b7a9fbc` |
+| 归档 SHA256 | `d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac` |
+| 实际导入镜像 | `sophgo/tpuc_dev:v3.4`，别名 `local/tpuc_dev:v3.4` |
+| 镜像 ID | `sha256:d73afc9614a7e78e69dca61a9b7ac84ee9598c942571ea557c603850c5df59a1` |
+| 镜像属性 | `amd64` / `linux` |
+| 根分区可用空间 | `docker load` 后立即为 9.4 GB；最终复核为 16 GB |
+| 受控 ONNX | `weights/best.onnx` 不存在，故无可报告的受控源 SHA256 |
+| 其他发现的 ONNX | `hangzhouwan_beishang/weights/best.onnx` 存在，但不是本次要求的输入路径 |
+| 测试输入 | 没有图片；`testdata/test.mp4` 存在，但主机及容器都无 `ffmpeg` |
 
-`tools/inspect_onnx.py` 已在本 x86 工作区复核上述模型结构。`tools/convert_model/convert_bmodel.sh` 已修正为 `MODE=f32` 默认流程：执行 `model_transform.py`、`model_deploy.py --quantize F32 --processor BM1684`，并要求工具链以一张本地图片执行 ONNX 参考输出和 MLIR/F32 原始 Tensor 比较。它不会进入 INT8，也不含 FP16 分支。
+## 脚本和预处理复核
 
-## 真实执行状态
+`tools/convert_model/convert_bmodel.sh` 已通过 `bash -n`。默认 `MODE=f32`，含 `set -euo pipefail`，使用 `--processor BM1684`、`--input_shapes [[1,3,640,640]]`、输入 `images`、输出 `output` 和 `--quantize F32`。脚本仅在显式指定 `MODE=int8` 时才会进入 INT8 分支，本次没有执行该分支；脚本没有 BM1684X 或 FP16 参数。
 
-转换未开始，未生成 bmodel。原因如下：
+原 `hangzhouwan_beishang/detector.py` 的预处理为：OpenCV BGR 转 RGB，直接 resize 到 640x640，除以 255，转 NCHW 并增加 batch 维度。未使用 letterbox，因此未擅自加入 `--keep_aspect_ratio`。
 
-1. Docker daemon 在主机侧正常，但官方仓库 Registry 查询 `sophgo/tpuc_dev:v3.4` 时访问 Docker Hub 超时；因此无法记录可拉取镜像的 digest，也不能使用不可追溯的 `latest`。
-2. 真实工作区同步副本没有 `testdata/calibration/`。F32 仍需要至少一张本地验证图片；脚本会在该目录中选择第一张图片，或要求显式设置 `TEST_IMAGE`。
-3. 未提供 BM1684 板端 IP 或可用 SSH 配置，故未执行要求的真实工作区 `rsync`，也没有交付复制动作。
+## 阻塞与执行状态
 
-因此没有 `artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`、`conversion.log`、模型清单、SHA256 或交付包；没有伪造模型查看、数值相似度或板端加载结果。
+转换未开始，未生成 `artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`。原因按门禁顺序如下：
+
+1. `docker load` 结束后根分区曾只剩 9.4 GB，低于要求的 10 GB；最终复核为 16 GB。任何重试前必须重新检查，不能依赖早先读数。
+2. `local/tpuc_dev:v3.4` 内没有发现 TPU-MLIR 工具、wheel、源码安装线索或环境脚本，不能确认并运行 BM1684 转换。
+3. `weights/best.onnx` 不存在；应由用户手动复制模型到该路径，不能以不同路径的模型替代。
+4. 没有稳定测试图片，且无法用现有工具从视频抽帧。
+
+因此没有 bmodel 大小或 SHA256、模型结构信息、ONNX 参考输出、F32 模拟输出、数值比较日志、模型清单或交付包。没有将原始 Tensor 一致性误述为检测框或 NMS 精度。
 
 ## 继续条件
 
-1. 恢复到官方 Sophgo TPU-MLIR Registry 或提供由 Sophgo 发布、带固定 digest 的离线镜像。
-2. 提供板端 IP/SSH 连通性后，以 `rsync` 同步真实开发工作区，并确认校准图片和模型 SHA256。
-3. 在 Docker 容器中确认 `model_transform.py`、`model_deploy.py` 和 `model_tool` 支持 `BM1684`，然后运行：
+1. 释放或扩容空间，使镜像导入后根分区至少保留 10 GB。
+2. 补充含 TPU-MLIR 工具和官方环境脚本的镜像，或提供镜像内的官方安装说明和 wheel。
+3. 手动将 `best.onnx` 放到 `weights/best.onnx`，并提供一张 JPG/JPEG/PNG 测试图片。
 
-```bash
-MODE=f32 bash tools/convert_model/convert_bmodel.sh
-```
-
-最终结论：**磁盘或 Docker 环境阻塞**。
+最终结论：**镜像内 TPU-MLIR 工具不可用，需补充官方环境。**

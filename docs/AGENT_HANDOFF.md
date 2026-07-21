@@ -1,58 +1,32 @@
-# Agent 接手提示词（AGENT_HANDOFF）
+# Agent 接手提示（AGENT_HANDOFF）
 
-> 复制下方「接手指令」整段给新 Agent，即可让其快速理解并接手本项目。
+## 当前状态：2026-07-21
 
----
+项目根目录为 `/home/huangchao/hangzhouwan/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），本任务路线仅为 F32，禁止 BM1684X、FP16、INT8、板端加载、网络流和 systemd 修改。
 
-## 接手指令
+离线归档 `/home/huangchao/tpu-mlir-offline/tpuc_dev_v3.4.tar.gz` 已验证本地 SHA256：
 
-你正在接手「杭州湾船舶检测 BM1684 边缘迁移」项目。请严格按以下信息行动，先理解现状再动手，禁止臆测。
+```text
+d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac
+```
 
-### 1. 仓库与分支
-- 本地仓库根：`/home/linaro/hangzhouwan-orign/hangzhouwan`
-- 远程：`https://github.com/lr12338/hangzhouwan.git`（public，未 push）
-- 分支：`feat/bm1684-edge-deployment`（由 `main` `56d380f` 创建，11 本地提交，HEAD `bf031af`，工作区应干净）
-- 接手第一步：`cd` 到仓库根，运行 `git status`、`git log --oneline -12` 核对状态。
+镜像已导入为 `sophgo/tpuc_dev:v3.4`，并标记 `local/tpuc_dev:v3.4`。其 ID 为 `sha256:d73afc9614a7e78e69dca61a9b7ac84ee9598c942571ea557c603850c5df59a1`，架构为 `amd64`，系统为 `linux`。
 
-### 2. 必读文档（按顺序）
-1. `README.md` - 项目入口、快速开始、目录、约束
-2. `docs/PROGRESS.md` - **阶段进度唯一权威索引**、阻塞、ADR
-3. `docs/06-stage2-onnx-audit-and-bmodel.md` - 阶段2 现状
-4. `docs/01-migration-gap-analysis.md` - 迁移差距与问题位置（带文件:行号）
+## 现有阻塞
 
-### 3. 平台与芯片（核心约束）
-- 芯片为 **BM1684**（chipid `0x1684`），**不是 BM1684X**。所有 `--processor` 必须为 `BM1684`。
-- 模型路线 **F32 基线 -> INT8**，**禁止 FP16**（FP16 是 BM1684X 专有）。
-- 工控机 = SoC 本身：libsophon 0.4.9、`libbmrt.so.1.0`、Sophon-FFmpeg/OpenCV 0.8.0、C++ 编译完整；Python 3.8 仅有 numpy/PyYAML/psutil（无 cv2/onnx/torch/joblib/sklearn）。
-- **禁止**在工控机安装 TPU-MLIR / torch / onnxruntime-gpu / CUDA / Python SAIL；**禁止**在工控机转换 bmodel（TPU-MLIR 为 x86-only）。
-- **禁止**连接正式 RTSP/MQTT/RTMP；禁止改 systemd；禁止重写 Git 历史；禁止 `git push`；禁止提交真实凭据；禁止运行 `starter_optimized.py` 或 `start_optimized.bat`（会连正式流）。
-- 新增日志用中文；敏感信息脱敏；示例配置中所有 stream 默认 `disabled`。
+1. `docker load` 后立即根分区可用空间曾为 9.4 GB，最终复核为 16 GB；每次转换开始前仍须确认至少保留 10 GB。
+2. 镜像内没有发现 `model_transform.py`、`model_deploy.py`、`model_runner.py`、`npz_tool.py`、`model_tool` 或 `envsetup.sh`，也没有发现可按官方说明安装的 TPU-MLIR wheel。
+3. 受控模型路径 `weights/best.onnx` 不存在。仓库中另有 `hangzhouwan_beishang/weights/best.onnx`，但不得替代受控输入；须由用户手动复制。
+4. 没有测试图片，只有 `testdata/test.mp4`；主机和容器均无 `ffmpeg`。
 
-### 4. 当前状态（截至 2026-07-21）
-- **阶段1（测试基线+安全配置）：✅ 完成**。源码已脱敏、配置校验/脱敏器/测试框架就绪，26 项离线测试全部通过（`python3 tests/run_tests.py`）。
-- **阶段2（ONNX 审计+bmodel）：🔶 板端就绪 / ⛔ 阻塞于 x86**。
-  - 已完成：`best.onnx` 审计（输入动态须固化 `[1,3,640,640]`，输出不含 NMS）、63 帧校准集、x86 转换脚本、板端最小 C++ 加载程序（编译并验证 API 链路，退出码 0）。
-  - **阻塞**：bmodel 转换须在 x86 执行 `tools/convert_model/convert_bmodel.sh`，产出的 bmodel 拷回板端 `weights/` 后才能 `bmrt_test` 验证加载与精度。
-- 模型已就位（gitignore，不入库）：`weights/best.onnx`、`weights/0121_random_forest_model.pkl`、`weights/beishang_x-l.pkl`、`weights/beet0110.pt`。
-- 测试视频：`testdata/test.mp4`（H264 960×544@20fps，125s）；校准帧：`testdata/calibration/`（63 帧，gitignore）。
-- x86 检查记录见 `docs/12-x86-server-check.md`：Docker 主机服务可用，但访问 Docker Hub 官方 TPU-MLIR 镜像超时；未拉取、未转换、未生成 bmodel。x86 副本中的 ONNX 位于 `hangzhouwan_beishang/weights/best.onnx`，校准图片和板端 IP 尚未同步提供。
-- `tools/convert_model/convert_bmodel.sh` 当前默认 `MODE=f32`，只允许 `BM1684` 和 F32；INT8 必须另行显式设置 `MODE=int8`，本任务不得执行该模式。
+因此没有 bmodel、数值比较、模型清单、交付包或板端结果。任何接手者都不得伪造这些结果。
 
-### 5. 接手后应做什么（取决于你被指派的任务）
-- **若任务是「解除阶段2阻塞」**：需 x86 开发机。在 x86 安装与 libsophon 0.4.9 兼容的 TPU-MLIR，运行 `tools/convert_model/convert_bmodel.sh`，产出 `weights/yolov7_ship_1684_f32.bmodel` 与 `..._int8.bmodel`，拷回板端。然后在板端运行 `/opt/sophon/libsophon-current/bin/bmrt_test --bmodel weights/*_1684_f32.bmodel --devid 0` 与 `LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib tools/image_inference/bmrt_load_test weights/*_1684_f32.bmodel`，验证加载与精度。
-- **若任务是「阶段3 单图 C++ PoC」**：须等阶段2 闭合（bmodel 到位）。注意 `best.onnx` 输出不含 NMS，后处理（xywh->xyxy、NMS、rescale）须在 C++ 侧实现。参考 `tools/image_inference/bmrt_load_test.cpp` 的 BMRuntime 加载范式。
-- **若任务是「其他/探索」**：先读 `docs/PROGRESS.md` 第 4 节「当前阻塞与待办」，确认前置条件满足再动手。不满足时不要伪造进度。
+## 已复核的转换约束
 
-### 6. 验证与提交
-- 改动后先跑测试：`python3 tests/run_tests.py`（须 26 项全过）。
-- 敏感信息扫描：`python3 tools/redact_secrets.py --scan hangzhouwan_beishang/`。
-- 仅本地 `git commit`，**禁止 `git push`**。提交信息用中文、conventional 风格（chore/test/docs/feat/fix）。
-- 改动文档/进度后同步更新 `docs/PROGRESS.md` 的「最后更新」与阶段状态。
+`tools/convert_model/convert_bmodel.sh` 通过 `bash -n`，默认 F32 分支使用 `set -euo pipefail`、`--processor BM1684`、`--input_shapes [[1,3,640,640]]`、输入 `images`、输出 `output` 和 `--quantize F32`。INT8 仅会在显式 `MODE=int8` 时进入，本任务不得执行。原 `detector.py` 使用 BGR 转 RGB、直接 resize 640x640、`/255`、NCHW，无 letterbox。
 
-### 7. 红线（违反即破坏项目约束）
-- 不得在工控机装 TPU-MLIR / torch / CUDA / SAIL / onnxruntime-gpu。
-- 不得在工控机转换 bmodel。
-- 不得连正式 RTSP/MQTT/RTMP、不得改 systemd、不得重写历史、不得 push、不得提交真实凭据。
-- 不得运行 `starter_optimized.py` / `start_optimized.bat`。
-- 不得把「文件存在」写成「已验证可用」，不得伪造推理结果或测试结果。
-- 目标芯片恒为 BM1684，模型路线恒为 F32->INT8（无 FP16）。
+## 解除后顺序
+
+先满足空间、官方工具、`weights/best.onnx` 和测试图片四项条件；随后只运行 F32 转换、`model_tool --info` 和 x86 原始输出 Tensor 数值比较。比较通过后生成交付包。不要自动继续 INT8、板端、单图 C++ 推理或任何流服务。
+
+修改后运行 `python3 tests/run_tests.py`、`git diff --check`，只本地提交，不执行 push。新增日志和报告使用中文。

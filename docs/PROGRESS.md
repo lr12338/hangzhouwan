@@ -4,13 +4,13 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-21（x86 F32 转换检查） |
+| 最后更新 | 2026-07-21（离线镜像导入与 F32 转换门禁复核） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
-| 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
-| 当前分支 | `feat/bm1684-edge-deployment`（由 `main` `56d380f` 创建，11 本地提交，未 push） |
-| HEAD | `a685ec2`（本 x86 同步副本转换前） |
-| 当前阶段 | **阶段2 F32 转换准备完成，⛔ Docker Registry / 真实板端同步阻塞** |
-| 总体健康度 | 🟡 阶段1 闭合，阶段2 待 x86 解阻塞 |
+| 本地路径 | `/home/huangchao/hangzhouwan/hangzhouwan` |
+| 当前分支 | `feat/bm1684-edge-deployment` |
+| HEAD | `b7a9fbc`（本次文档更新前） |
+| 当前阶段 | **阶段2 F32 转换⛔离线镜像工具和受控资产阻塞** |
+| 总体健康度 | 🟡 阶段1 闭合，阶段2 未转换 |
 
 ---
 
@@ -52,7 +52,7 @@
 
 ---
 
-## 3. 阶段2 完成项清单（🔶 板端就绪 / ⛔ 待 x86）
+## 3. 阶段2 完成项清单（🔶 受控转换⛔阻塞）
 
 - [x] 模型补齐至 `weights/`（用户提供，gitignore）：`best.onnx`(24M)、`0121_random_forest_model.pkl`(7.6M)、`beishang_x-l.pkl`(2.1M)、`beet0110.pt`(74.7M)
 - [x] ONNX 审计（`tools/inspect_onnx.py`，纯标准库 protobuf 解析）：ir7 / opset12 / 239 节点；输入 `images` FLOAT **动态 `[batch,3,height,width]`** -> 须固化 `[1,3,640,640]`；输出 `output` **不含 NMS**（后处理须 C++ 侧实现，阶段3）；算子均为 TPU-MLIR 常见支持
@@ -63,16 +63,19 @@
 - [x] 文档：`docs/06-stage2-onnx-audit-and-bmodel.md`；更新 `docs/05`
 - [x] 测试：新增 ONNX 审计回归测试（2 项），总计 26 项通过
 
-**待执行（x86，使用本阶段脚本）：**
-- [ ] 使用固定 digest 的 Sophgo TPU-MLIR 镜像运行 `MODE=f32 tools/convert_model/convert_bmodel.sh`，产出 `artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`
-- [ ] 使用真实板端工作区的校准图片完成 ONNX/MLIR F32 原始 Tensor 验证
-- [ ] 将 F32 交付包复制回板端并校验 SHA256
+**2026-07-21 离线复核：**
+- [x] 已校验并导入 `/home/huangchao/tpu-mlir-offline/tpuc_dev_v3.4.tar.gz`；本地完整性 SHA256 为 `d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac`
+- [x] 实际镜像为 `sophgo/tpuc_dev:v3.4`，已标记为 `local/tpuc_dev:v3.4`；ID `sha256:d73afc9614a7e78e69dca61a9b7ac84ee9598c942571ea557c603850c5df59a1`，`amd64/linux`
+- [ ] F32 转换：`docker load` 后立即空间曾为 9.4 GB，最终复核为 16 GB；每次重试前须确认至少 10 GB。镜像内未找到 TPU-MLIR 工具或环境脚本，禁止转换
+- [ ] 受控 ONNX：`weights/best.onnx` 缺失。不同路径的 `hangzhouwan_beishang/weights/best.onnx` 不替代受控路径
+- [ ] 数值验证：无测试图片，且主机和容器均无 `ffmpeg`，未生成参考输出或 bmodel 输出
+- [ ] F32 交付包：未生成；未复制至板端
 
 **待执行（板端，bmodel 到位后）：**
 - [ ] `bmrt_test --bmodel ..._1684_f32.bmodel` 与 `bmrt_load_test ..._1684_f32.bmodel` 验证加载（满足"最小 C++ 加载成功"门禁）
 - [ ] F32 精度与原 ONNX 对比通过 -> INT8 精度验证
 
-**阶段2 门禁：🔶 板端准备完成；bmodel 转换与板端精度验证待 x86 执行。**
+**阶段2 门禁：⛔ 未生成 bmodel；禁止将任何 x86 或板端验证标记为通过。**
 
 ---
 
@@ -81,18 +84,17 @@
 ### 阻塞（须外部输入才能解除）
 | ID | 阻塞项 | 影响阶段 | 解除条件 | 负责方 |
 |---|---|---|---|---|
-| B3 | x86 模型转换工具链未就位 | 阶段2 | x86 主机 + 与 libsophon 0.4.9 兼容的 TPU-MLIR | 用户/运维 |
-| B4 | 本任务操作机即 SoC 本身，非 x86 开发机 | 阶段2/9 | 明确 x86 开发机接入方式 | 用户 |
+| B3 | 导入镜像中没有 TPU-MLIR 工具或环境脚本 | 阶段2 | 提供含官方工具的兼容镜像或镜像内官方安装说明 | 用户/运维 |
+| B4 | 容器导入期间空间读数曾为 9.4 GB（最终复核 16 GB） | 阶段2 | 每次转换前复核至少 10 GB 可用空间 | 用户/运维 |
 | B5 | 仓库历史含真实凭据（public） | 运维 | 按 `credential-rotation-checklist.md` 轮换凭据 | 用户/运维 |
-| B6 | 官方 TPU-MLIR Docker Registry 不可达 | 阶段2 | 恢复 Registry 或提供 Sophgo 发布的固定 digest 离线镜像 | 运维 |
-| B7 | x86 同步副本没有 `testdata/calibration/` 且未提供板端 IP | 阶段2 | 提供 SSH 地址后 rsync 真实工作区 | 用户/运维 |
+| B6 | `weights/best.onnx` 缺失 | 阶段2 | 用户手动复制 ONNX 至受控路径 | 用户 |
+| B7 | 无 JPG/JPEG/PNG 测试图片，无法从视频抽帧 | 阶段2 | 提供一张稳定图片或受控 ffmpeg 工具 | 用户/运维 |
 
 > 阶段1 的 B1/B2（三模型缺失）已于阶段2 解除（用户补齐模型）。
 
 ### 待办（阶段2 解阻塞后）
-- [ ] x86 执行 bmodel 转换并拷回板端
-- [ ] 板端 `bmrt_test` + 最小 C++ 加载验证 + F32/INT8 精度对比
-- [ ] 阶段3：单图 C++ 推理 PoC（BMRuntime 推理 + 后处理 + NMS + 绘框，1000 张无内存增长）
+- [ ] 条件全部满足后，仅执行 BM1684 F32 转换和 x86 原始 Tensor 数值验证
+- [ ] 生成 F32 交付包；本次不执行板端验证或 INT8
 
 ---
 
