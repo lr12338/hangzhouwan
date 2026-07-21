@@ -8,6 +8,7 @@
 // 用法见 tools/video_inference/README.md。响应 SIGINT/SIGTERM 优雅退出。
 // =============================================================================
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -56,6 +57,13 @@ struct Args {
   int metrics_interval_sec = 10;
   std::string preprocess = "cpu";
   std::string draw_mode = "cpu";
+  std::string source_type = "file";     // file | rtsp
+  std::string input_env;                  // RTSP: 环境变量名
+  std::string rtsp_transport = "tcp";
+  int64_t rtsp_stimeout_us = 5000000;
+  int rtsp_max_reconnect = -1;
+  int64_t rtsp_initial_backoff_ms = 1000;
+  int64_t rtsp_max_backoff_ms = 30000;
   bool help = false;
 };
 
@@ -88,6 +96,13 @@ bool parse(int argc, char** argv, Args& a, std::string& err) {
     else if (k == "--metrics-interval") { v = get(k.c_str(), i); if (!v) return false; a.metrics_interval_sec = std::atoi(v); }
     else if (k == "--preprocess") { v = get(k.c_str(), i); if (v) a.preprocess = v; else return false; }
     else if (k == "--draw-mode") { v = get(k.c_str(), i); if (v) a.draw_mode = v; else return false; }
+    else if (k == "--source-type") { v = get(k.c_str(), i); if (v) a.source_type = v; else return false; }
+    else if (k == "--input-env") { v = get(k.c_str(), i); if (v) a.input_env = v; else return false; }
+    else if (k == "--rtsp-transport") { v = get(k.c_str(), i); if (v) a.rtsp_transport = v; else return false; }
+    else if (k == "--rtsp-stimeout-us") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_stimeout_us = std::strtoll(v, nullptr, 10); }
+    else if (k == "--rtsp-max-reconnect") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_max_reconnect = std::atoi(v); }
+    else if (k == "--rtsp-initial-backoff-ms") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_initial_backoff_ms = std::strtoll(v, nullptr, 10); }
+    else if (k == "--rtsp-max-backoff-ms") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_max_backoff_ms = std::strtoll(v, nullptr, 10); }
     else { err = "未知参数: " + k; return false; }
   }
   return true;
@@ -101,7 +116,10 @@ void usage() {
       "  --bitrate-kbps 800 --gop 20 --queue-size 1\n"
       "  --conf 0.1 --iou 0.1 --result-ttl-ms 1000\n"
       "  --loop 1 (0=无限) --max-seconds 0 (0=不限时) --metrics-interval 10\n"
-      "  --preprocess cpu|bmcv --draw-mode cpu|bmcv|none\n");
+      "  --preprocess cpu|bmcv --draw-mode cpu|bmcv|none\n"
+      "  --source-type file|rtsp --input-env <NAME>  (RTSP: URL 仅从环境变量读取)\n"
+      "  --rtsp-transport tcp|udp --rtsp-stimeout-us 5000000\n"
+      "  --rtsp-max-reconnect -1 --rtsp-initial-backoff-ms 1000 --rtsp-max-backoff-ms 30000\n");
 }
 }  // namespace
 
@@ -150,6 +168,12 @@ int main(int argc, char** argv) {
   cfg.metrics_interval_sec = a.metrics_interval_sec;
   cfg.preprocess = a.preprocess;
   cfg.draw_mode = a.draw_mode;
+  cfg.source_type = a.source_type;
+  cfg.input_env = a.input_env;
+  cfg.rtsp_transport = a.rtsp_transport; cfg.rtsp_stimeout_us = a.rtsp_stimeout_us;
+  cfg.rtsp_max_reconnect = a.rtsp_max_reconnect;
+  cfg.rtsp_initial_backoff_ms = a.rtsp_initial_backoff_ms;
+  cfg.rtsp_max_backoff_ms = a.rtsp_max_backoff_ms;
 
   ensure_dir(cfg.output_path);
 

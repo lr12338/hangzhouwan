@@ -161,8 +161,8 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
     err = "空帧";
     return false;
   }
-  // 按输出帧序重置 pts（编码器 time_base = 1/fps）。
-  vf.frame->pts = out_index_++;
+  // 按输出帧序重置 pts（编码器 time_base = 1/fps）；忽略源 PTS，保证输出单调。
+  vf.frame->pts = pts_.next();
   int sr = avcodec_send_frame(enc_, vf.frame);
   if (sr < 0) {
     char eb[AV_ERROR_MAX_STRING_SIZE];

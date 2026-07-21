@@ -44,7 +44,7 @@ bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
 }  // namespace
 
 bool PipelineConfig::validate(std::string& err) const {
-  if (input_path.empty()) { err = "input_path 为空"; return false; }
+  if (source_type == "file" && input_path.empty()) { err = "input_path 为空"; return false; }
   if (output_path.empty()) { err = "output_path 为空"; return false; }
   if (bmodel_path.empty()) { err = "bmodel_path 为空"; return false; }
   if (source_fps <= 0) { err = "source_fps 非法"; return false; }
@@ -69,6 +69,16 @@ bool PipelineConfig::validate(std::string& err) const {
   if (draw_mode != "cpu" && draw_mode != "bmcv" && draw_mode != "none") {
     err = "draw_mode 必须为 cpu、bmcv 或 none"; return false;
   }
+  if (source_type != "file" && source_type != "rtsp") {
+    err = "source_type 必须为 file 或 rtsp"; return false;
+  }
+  if (source_type == "rtsp") {
+    if (input_env.empty()) { err = "RTSP 必须通过 --input-env 提供环境变量名（URL 不入命令行/日志）"; return false; }
+    RtspSourceOptions ro; ro.transport = rtsp_transport; ro.stimeout_us = rtsp_stimeout_us;
+    ro.max_reconnect_attempts = rtsp_max_reconnect; ro.initial_backoff_ms = rtsp_initial_backoff_ms;
+    ro.max_backoff_ms = rtsp_max_backoff_ms;
+    if (!ro.validate(err)) return false;
+  }
   return true;
 }
 
@@ -91,6 +101,7 @@ void SingleStreamPipeline::set_error(int code, const std::string& msg) {
 }
 
 void SingleStreamPipeline::request_stop() {
+  source_.request_stop();  // 触发中断回调，打断阻塞中的 open/read
   bool was = stop_.exchange(true);
   if (!was) {
     if (q_decode_) q_decode_->close();
@@ -106,10 +117,28 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     return 2;
   }
 
-  source_.set_loop(cfg_.loop);
-  if (!source_.open(cfg_.input_path, cfg_.device, 20, cfg_.decoder, err)) {
-    std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
-    return 3;
+  if (cfg_.source_type == "rtsp") {
+    std::string url, e;
+    if (!resolve_input_env(cfg_.input_env, url, e)) {
+      std::fprintf(stderr, "错误 | RTSP输入 | %s\n", e.c_str());  // 仅含变量名，不含 URL
+      return 3;
+    }
+    RtspSourceOptions ro;
+    ro.transport = cfg_.rtsp_transport;
+    ro.stimeout_us = cfg_.rtsp_stimeout_us;
+    ro.max_reconnect_attempts = cfg_.rtsp_max_reconnect;
+    ro.initial_backoff_ms = cfg_.rtsp_initial_backoff_ms;
+    ro.max_backoff_ms = cfg_.rtsp_max_backoff_ms;
+    if (!source_.open_rtsp(url, cfg_.device, 20, cfg_.decoder, ro, err)) {
+      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());  // err 不含 URL
+      return 3;
+    }
+  } else {
+    source_.set_loop(cfg_.loop);
+    if (!source_.open(cfg_.input_path, cfg_.device, 20, cfg_.decoder, err)) {
+      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
+      return 3;
+    }
   }
   source_w_ = source_.width();
   source_h_ = source_.height();
@@ -178,6 +207,7 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
 
 void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
   const int output_step = cfg.source_fps / cfg.output_fps;  // 每隔多少源帧输出一帧
+  const bool is_rtsp = (cfg.source_type == "rtsp");  // RTSP 实时流不做墙钟节流
   // 实时节流：按源帧率回放，保证输出时长正确、稳定性测试运行满指定时长。
   // 解码硬件远快于实时，不节流会导致文件在数秒内跑完、大量丢帧、输出时长错误。
   const int64_t frame_interval_ms = 1000 / cfg.source_fps;
@@ -186,22 +216,26 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
   std::string err;
   while (!stop_.load()) {
     if (!source_.read(vf, err)) {
-      if (err != "EOF") {
-        set_error(6, "解码失败: " + err);
-      } else {
+      if (err == "EOF") {
         std::fprintf(stdout, "信息 | 解码 | 正常 EOF，循环完成 %d 轮\n",
                      source_.loops_completed());
         std::fflush(stdout);
+      } else if (err == "停止") {
+        // 信号/限时主动停止，非错误
+      } else {
+        set_error(6, "解码失败: " + err);
       }
       break;
     }
     metrics_.decoded_frames.fetch_add(1);
     metrics_.read_frames.store(source_.packets_read());
-    // 实时节流：若墙钟落后于视频时间则等待。
-    const int64_t expected_ms = pace_start_ms + vf.sequence * frame_interval_ms;
-    const int64_t actual_ms = now_ms();
-    if (actual_ms < expected_ms) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(expected_ms - actual_ms));
+    // 实时节流：本地文件需按源帧率回放；RTSP 实时流由网络按真实速率到达，不节流。
+    if (!is_rtsp) {
+      const int64_t expected_ms = pace_start_ms + vf.sequence * frame_interval_ms;
+      const int64_t actual_ms = now_ms();
+      if (actual_ms < expected_ms) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(expected_ms - actual_ms));
+      }
     }
     if (vf.sequence % output_step == 0) {
       metrics_.queued_frames.fetch_add(1);
@@ -261,6 +295,11 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   VideoFrame vf;
   while (!stop_.load() && q_decode_->pop(vf)) {
     if (!vf.frame) continue;
+    // 源 epoch 变化（RTSP 重连）：清除过期检测结果，避免旧框粘贴到新连接的帧。
+    if (vf.source_epoch != last_epoch_) {
+      snapshot_.clear();
+      last_epoch_ = vf.source_epoch;
+    }
     const int64_t proc_start = now_ms();
     AVFrame* f = vf.frame;
 

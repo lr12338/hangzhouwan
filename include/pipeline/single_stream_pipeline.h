@@ -49,6 +49,14 @@ struct PipelineConfig {
   int metrics_interval_sec = 10;
   std::string preprocess = "cpu";   // cpu | bmcv
   std::string draw_mode = "cpu";    // cpu | bmcv | none
+  // RTSP 输入（阶段4.2）
+  std::string source_type = "file";  // file | rtsp
+  std::string input_env;               // RTSP: 输入 URL 环境变量名（必须，URL 不入命令行/日志）
+  std::string rtsp_transport = "tcp"; // tcp | udp
+  int64_t rtsp_stimeout_us = 5000000;  // socket TCP I/O 超时（微秒）
+  int rtsp_max_reconnect = -1;         // -1=无限 0=不重连 >0=上限
+  int64_t rtsp_initial_backoff_ms = 1000;
+  int64_t rtsp_max_backoff_ms = 30000;
   // 校验配置合法性；返回 false 时 err 给出原因。
   bool validate(std::string& err) const;
 };
@@ -90,6 +98,7 @@ class SingleStreamPipeline {
   int source_w_ = 0;
   int source_h_ = 0;
   int64_t start_ms_ = 0;
+  int last_epoch_ = 0;  // 上次处理的源 epoch，用于重连后清除过期检测结果
   void set_error(int code, const std::string& msg);
 };
 

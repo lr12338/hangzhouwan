@@ -101,14 +101,119 @@ def redact(text):
     out = re.sub(r'(?i)(password\s*[:=]\s*)["\']?[^"\'\s,}]+', r'\1<已脱敏>', out)
     return out
 
+
+# ----- 仓库敏感信息扫描 -----
+# 仅检测"看起来是真实凭据"的模式，允许测试/示例文件（按设计含样本凭据）。
+_PLACEHOLDERS = (
+    "***", "<已脱敏>", "<流Key已脱敏>", "<令牌已脱敏>", "<凭据已脱敏>",
+    "<敏感环境变量已脱敏>", "xxx", "xxxx", "example", "your_password",
+    "your_token", "<password>", "<secret>", "redacted", "changeme",
+)
+# 允许含样本凭据的文件（测试/示例/工具自身），扫描时跳过。
+_ALLOWLIST_SUFFIXES = (
+    "tests/unit/test_redact_secrets.py",
+    "tests/unit_cpp/test_rtsp_source_options.cpp",
+    "tools/redact_secrets.py",
+    ".env.example",
+)
+_ALLOWLIST_DIRS = ("tests/fixtures/",)
+
+# URL 凭据：scheme://user:password@host （密码非占位符）
+_RE_URL_CRED = re.compile(r"(?i)\b(rtmp|rtsp|https?|ftp)://[^:/@\s]+:([^@\s]+)@")
+# 赋值凭据：password=xxx / passwd: xxx （值非空且非占位符）
+_RE_ASSIGN_CRED = re.compile(r"(?i)(password|passwd|secret|api_?key|token)\s*[:=]\s*['\"]?([^\s'\"#,};]+)")
+
+
+def _is_placeholder(val):
+    if val is None:
+        return True
+    v = val.strip().strip("'\"").lower()
+    if v == "" or v in ("password", "passwd", "secret", "token"):
+        return True
+    return any(ph in v for ph in _PLACEHOLDERS)
+
+
+def _looks_like_literal_secret(val):
+    """赋值右侧是否像真实硬编码凭据（字面量），而非代码/占位符。
+    排除：占位符、空、以及含 ().{} 或以代码关键字开头的值（如 os.environ.get(...)）。"""
+    if _is_placeholder(val):
+        return False
+    v = val.strip().strip("'\"")
+    if v == "":
+        return False
+    # 代码构造（函数调用/属性访问/对象）不是字面量凭据
+    if any(c in v for c in "().{}"):
+        return False
+    if re.match(r"(?i)^(function|os|sys|process|environ|getenv|true|false|null|none|return|var|let|const|this)\b", v):
+        return False
+    return True
+
+
+def _line_has_secret(line):
+    for m in _RE_URL_CRED.finditer(line):
+        if not _is_placeholder(m.group(2)):
+            return True
+    for m in _RE_ASSIGN_CRED.finditer(line):
+        if _looks_like_literal_secret(m.group(2)):
+            return True
+    return False
+
+
+def _is_text_file(path):
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(2048)
+    except OSError:
+        return False
+    if b"\x00" in chunk:
+        return False
+    return True
+
+
+def scan_path(root):
+    """扫描 root 下文本文件中的真实凭据泄漏。返回 (findings, scanned_count)。
+    findings 为 (relpath, lineno, line) 列表。跳过二进制/构建产物/允许列表文件。"""
+    skip_dirs = {".git", "build", "artifacts", "__pycache__", "Testing", ".venv", "venv"}
+    findings = []
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if any(rel.endswith(suf) for suf in _ALLOWLIST_SUFFIXES):
+                continue
+            if any(rel.startswith(d) for d in _ALLOWLIST_DIRS):
+                continue
+            if not _is_text_file(full):
+                continue
+            scanned += 1
+            try:
+                with open(full, "r", encoding="utf-8", errors="ignore") as f:
+                    for i, line in enumerate(f, 1):
+                        if _line_has_secret(line.rstrip("\n")):
+                            findings.append((rel, i, line.rstrip("\n")))
+            except OSError:
+                continue
+    return findings, scanned
+
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="敏感信息脱敏工具（中文日志）")
+    parser = argparse.ArgumentParser(description="敏感信息脱敏与扫描工具（中文日志）")
     parser.add_argument("text", nargs="?", help="待脱敏的文本；省略则从 stdin 读取")
+    parser.add_argument("--scan", metavar="PATH", nargs="?", const=".",
+                        help="扫描 PATH（默认当前目录）下文本文件的真实凭据泄漏，发现则退出码 1")
     args = parser.parse_args()
+    if args.scan is not None:
+        findings, scanned = scan_path(args.scan)
+        for rel, i, line in findings:
+            print(f"{rel}:{i}: {line.strip()}")
+        print(f"信息 | 扫描 | 已扫描 {scanned} 个文本文件，发现 {len(findings)} 处疑似凭据泄漏")
+        return 1 if findings else 0
     src = args.text if args.text is not None else __import__("sys").stdin.read()
     print(redact(src))
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

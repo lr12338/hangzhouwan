@@ -19,6 +19,7 @@ struct VideoFrame {
   int64_t sequence = 0;          // 解码序号（从 0 单调递增）
   int64_t pts = 0;               // 源 PTS（按源 time_base）
   int64_t capture_time_ms = 0;   // 解码完成时刻（墙钟 ms）
+  int source_epoch = 0;          // 源连接 epoch（每次重连 +1），用于清除过期检测结果
   int width = 0;
   int height = 0;
   AVFrame* frame = nullptr;      // NV12 bm_image；持有引用，需 release()
@@ -31,7 +32,7 @@ struct VideoFrame {
   VideoFrame& operator=(VideoFrame&& o) noexcept {
     release();
     sequence = o.sequence; pts = o.pts; capture_time_ms = o.capture_time_ms;
-    width = o.width; height = o.height; frame = o.frame;
+    source_epoch = o.source_epoch; width = o.width; height = o.height; frame = o.frame;
     o.frame = nullptr;
     return *this;
   }

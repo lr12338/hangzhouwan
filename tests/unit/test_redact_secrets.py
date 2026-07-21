@@ -64,5 +64,42 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(src, redact(src))
 
 
+
+
+class ScanTest(unittest.TestCase):
+    """--scan 模式：检测真实凭据泄漏，忽略 env 读取与占位符。"""
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="hzw_scan_")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp)
+
+    def test_detects_rtsp_credentials(self):
+        from tools.redact_secrets import _line_has_secret
+        self.assertTrue(_line_has_secret("rtsp://admin:RealPwd@10.0.0.1:554/ch1"))
+        self.assertFalse(_line_has_secret("rtsp://admin:***@10.0.0.1:554/ch1"))  # 已脱敏
+
+    def test_detects_hardcoded_password_but_not_env_read(self):
+        from tools.redact_secrets import _looks_like_literal_secret
+        self.assertTrue(_looks_like_literal_secret('"hardcoded_pw"'))
+        self.assertTrue(_looks_like_literal_secret("s3cr3t"))
+        self.assertFalse(_looks_like_literal_secret('os.environ.get("X","")'))
+        self.assertFalse(_looks_like_literal_secret("***"))
+        self.assertFalse(_looks_like_literal_secret(""))
+
+    def test_scan_path_finds_leak(self):
+        import os
+        from tools.redact_secrets import scan_path
+        with open(os.path.join(self.tmp, "leak.py"), "w") as f:
+            f.write('URL="rtsp://user:RealSecret@192.0.2.1:554/s"\n'
+                    'PASSWORD = os.environ.get("P","")\n')
+        findings, scanned = scan_path(self.tmp)
+        self.assertEqual(scanned, 1)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("leak.py", findings[0][0])
+        self.assertNotIn("RealSecret", os.environ.get("PATH", ""))  # 占位断言
+
 if __name__ == "__main__":
     unittest.main()

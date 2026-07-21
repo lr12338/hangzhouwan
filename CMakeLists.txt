@@ -53,6 +53,7 @@ add_library(hzw_inf STATIC
   src/util/sha256.cpp
   src/video/sophon_ffmpeg_source.cpp
   src/video/sophon_ffmpeg_sink.cpp
+  src/video/rtsp_source_options.cpp
   src/video/bmcv_processor.cpp
   src/monitoring/pipeline_metrics.cpp
   src/pipeline/single_stream_pipeline.cpp)
@@ -94,6 +95,15 @@ add_test(NAME pipeline_timing COMMAND test_pipeline_timing)
 add_executable(test_bmcv_processor tests/unit_cpp/test_bmcv_processor.cpp)
 target_link_libraries(test_bmcv_processor PRIVATE hzw_inf)
 add_test(NAME bmcv_processor COMMAND test_bmcv_processor)
+
+# 阶段4.2 RTSP 源选项与输出 PTS 单元测试（纯逻辑，无需硬件）
+add_executable(test_rtsp_source_options tests/unit_cpp/test_rtsp_source_options.cpp)
+target_link_libraries(test_rtsp_source_options PRIVATE hzw_inf)
+add_test(NAME rtsp_source_options COMMAND test_rtsp_source_options)
+
+add_executable(test_output_pts tests/unit_cpp/test_output_pts.cpp)
+target_link_libraries(test_output_pts PRIVATE hzw_inf)
+add_test(NAME output_pts COMMAND test_output_pts)
 
 # 稳定性测试脚本行为验证
 add_test(NAME stability_script COMMAND bash ${CMAKE_SOURCE_DIR}/tests/test_stability_script.sh)

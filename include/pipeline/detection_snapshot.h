@@ -44,6 +44,11 @@ class SnapshotStore {
     std::lock_guard<std::mutex> lk(m_);
     return snap_;
   }
+  // 清除当前快照（重连后调用，避免将旧检测结果粘贴到新连接的帧）。
+  void clear() {
+    std::lock_guard<std::mutex> lk(m_);
+    snap_ = DetectionSnapshot{};
+  }
 
  private:
   mutable std::mutex m_;

@@ -16,6 +16,15 @@
 
 namespace hzw {
 
+// 输出 PTS 序列：按输出帧序严格递增分配 PTS，忽略源 PTS。
+// 保证输出时间戳单调（源 PTS 回退/RTSP 重连跳变不影响输出），可独立单元测试。
+struct OutputPtsSequence {
+  int64_t next() { return seq_++; }
+  int64_t current() const { return seq_; }
+ private:
+  int64_t seq_ = 0;
+};
+
 class SophonVideoSink {
  public:
   SophonVideoSink() = default;
@@ -35,7 +44,7 @@ class SophonVideoSink {
   // 刷新编码器并写 trailer。
   void close();
 
-  int64_t output_frames() const { return out_index_; }
+  int64_t output_frames() const { return pts_.current(); }
   std::string actual_container() const { return container_; }
   std::string actual_encoder() const { return encoder_name_; }
 
@@ -49,7 +58,7 @@ class SophonVideoSink {
   AVCodecContext* enc_ = nullptr;       // h264_bm 编码器
   AVStream* vstream_ = nullptr;
   AVPacket* pkt_ = nullptr;
-  int64_t out_index_ = 0;               // 输出帧序（用于 pts）
+  OutputPtsSequence pts_;              // 输出帧序（用于 pts，严格递增）
   bool header_written_ = false;
   std::string container_;               // 实际容器：mp4/ts/h264
   std::string encoder_name_;

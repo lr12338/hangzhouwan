@@ -45,6 +45,12 @@ int main() {
   got = store.get();
   CHECK(got.source_sequence == 9);
 
+  // clear()：重连后清除过期检测结果。
+  store.clear();
+  got = store.get();
+  CHECK(!got.valid());            // 清除后无效
+  CHECK(got.expired(1000, 1000));  // 且过期，绘制端据此跳过旧框
+
   if (g_failures == 0) std::cout << "通过 | DetectionSnapshot 单元测试全部通过\n";
   return g_failures == 0 ? 0 : 1;
 }
