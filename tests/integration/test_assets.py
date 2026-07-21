@@ -59,17 +59,17 @@ class AssetInventoryTest(unittest.TestCase):
         self.assertIn("height=544", out)
 
     def test_no_project_test_image(self):
-        # 仅 nginx-rtmp-module 自带 bg.jpg，项目无独立测试图片
-        images = []
-        for root, dirs, files in os.walk(REPO):
-            if ".git" in root:
-                continue
-            for fn in files:
-                if fn.lower().endswith((".jpg", ".jpeg", ".png")):
-                    images.append(os.path.relpath(os.path.join(root, fn), REPO))
-        # 允许 nginx 模块自带图片，但不应有项目级测试图
-        project_imgs = [p for p in images if "nginx" not in p]
-        self.assertEqual([], project_imgs, f"发现项目测试图片（应在 fixtures 显式管理）：{project_imgs}")
+        # 仅 nginx-rtmp-module 自带 bg.jpg，项目无独立“入库”测试图片。
+        # 校准帧 testdata/calibration/*.jpg 为 gitignore 的派生资产，不计入。
+        r = subprocess.run(
+            ["git", "-C", REPO, "ls-files"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        tracked = [ln for ln in r.stdout.splitlines() if ln]
+        project_imgs = [
+            p for p in tracked
+            if p.lower().endswith((".jpg", ".jpeg", ".png")) and "nginx" not in p
+        ]
+        self.assertEqual([], project_imgs, f"发现入库项目测试图片（应在 fixtures 显式管理）：{project_imgs}")
 
 
 if __name__ == "__main__":
