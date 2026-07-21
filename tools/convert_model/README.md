@@ -8,12 +8,12 @@
 | 文件 | 用途 |
 |---|---|
 | `extract_calibration.sh` | 从 `testdata/test.mp4` 抽取 INT8 校准帧（真实数据，工控机/x86 均可运行） |
-| `convert_bmodel.sh` | x86 TPU-MLIR 转换管线：ONNX -> MLIR -> F32 bmodel -> INT8 bmodel |
+| `convert_bmodel.sh` | x86 TPU-MLIR 转换管线：默认 ONNX -> MLIR -> BM1684 F32 bmodel；INT8 须显式启用 |
 
 ## 前置条件（x86）
 
-- TPU-MLIR，版本须与板端 **libsophon 0.4.9** 匹配（`model_transform`/`model_deploy`/`run_calibration` 可用）；
-- 仓库已含 `weights/best.onnx` 与 `testdata/test.mp4`。
+- TPU-MLIR 官方固定版本镜像（容器内 `model_transform.py`、`model_deploy.py`、`model_tool` 可用）；
+- 仓库已含 `hangzhouwan_beishang/weights/best.onnx` 与至少一张本地验证图片（默认从 `testdata/calibration/` 选择）。
 
 ## 转换参数（来自 ONNX 审计，见 `docs/06`）
 
@@ -30,12 +30,9 @@
 ## 执行步骤
 
 ```bash
-# 1) 准备校准帧（工控机已执行过；x86 可重跑）
-bash tools/convert_model/extract_calibration.sh
-
-# 2) 在 x86 TPU-MLIR 环境执行转换
-bash tools/convert_model/convert_bmodel.sh
-# 产物：weights/yolov7_ship_1684_f32.bmodel（基线）、weights/yolov7_ship_1684_int8.bmodel（生产）
+# 在 x86 TPU-MLIR 容器内执行。默认只生成 F32，不会生成 INT8。
+MODE=f32 bash tools/convert_model/convert_bmodel.sh
+# 产物：artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel
 ```
 
 ## 转换后（板端 BM1684 验证）

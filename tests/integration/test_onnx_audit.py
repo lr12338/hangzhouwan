@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ONNX = os.path.join(REPO, "weights", "best.onnx")
+ONNX = os.path.join(REPO, "hangzhouwan_beishang", "weights", "best.onnx")
 
 
 @unittest.skipUnless(os.path.exists(ONNX), "best.onnx 不存在（被 gitignore），跳过审计测试")

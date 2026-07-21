@@ -35,6 +35,8 @@
   - **阻塞**：bmodel 转换须在 x86 执行 `tools/convert_model/convert_bmodel.sh`，产出的 bmodel 拷回板端 `weights/` 后才能 `bmrt_test` 验证加载与精度。
 - 模型已就位（gitignore，不入库）：`weights/best.onnx`、`weights/0121_random_forest_model.pkl`、`weights/beishang_x-l.pkl`、`weights/beet0110.pt`。
 - 测试视频：`testdata/test.mp4`（H264 960×544@20fps，125s）；校准帧：`testdata/calibration/`（63 帧，gitignore）。
+- x86 检查记录见 `docs/12-x86-server-check.md`：Docker 主机服务可用，但访问 Docker Hub 官方 TPU-MLIR 镜像超时；未拉取、未转换、未生成 bmodel。x86 副本中的 ONNX 位于 `hangzhouwan_beishang/weights/best.onnx`，校准图片和板端 IP 尚未同步提供。
+- `tools/convert_model/convert_bmodel.sh` 当前默认 `MODE=f32`，只允许 `BM1684` 和 F32；INT8 必须另行显式设置 `MODE=int8`，本任务不得执行该模式。
 
 ### 5. 接手后应做什么（取决于你被指派的任务）
 - **若任务是「解除阶段2阻塞」**：需 x86 开发机。在 x86 安装与 libsophon 0.4.9 兼容的 TPU-MLIR，运行 `tools/convert_model/convert_bmodel.sh`，产出 `weights/yolov7_ship_1684_f32.bmodel` 与 `..._int8.bmodel`，拷回板端。然后在板端运行 `/opt/sophon/libsophon-current/bin/bmrt_test --bmodel weights/*_1684_f32.bmodel --devid 0` 与 `LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib tools/image_inference/bmrt_load_test weights/*_1684_f32.bmodel`，验证加载与精度。

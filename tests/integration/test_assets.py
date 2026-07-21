@@ -11,7 +11,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 WEIGHTS = os.path.join(REPO, "hangzhouwan_beishang", "weights")
 TESTDATA = os.path.join(REPO, "testdata")
 
-REQUIRED_MISSING_MODELS = [
+IGNORED_MODEL_FILES = [
     os.path.join(WEIGHTS, "best.onnx"),
     os.path.join(WEIGHTS, "0121_random_forest_model.pkl"),
     os.path.join(WEIGHTS, "beishang_x-l.pkl"),
@@ -27,14 +27,17 @@ def _ffprobe():
 
 
 class AssetInventoryTest(unittest.TestCase):
-    def test_three_models_absent_and_gitignored(self):
+    def test_model_files_are_gitignored_and_untracked(self):
         gi = os.path.join(REPO, ".gitignore")
         with open(gi, encoding="utf-8") as f:
             patterns = f.read()
-        for m in REQUIRED_MISSING_MODELS:
-            self.assertFalse(os.path.exists(m), f"意外发现模型文件：{m}")
+        for m in IGNORED_MODEL_FILES:
             ext = os.path.splitext(m)[1].lstrip(".")
             self.assertIn(f"*.{ext}", patterns, f".gitignore 未忽略 *.{ext}")
+            tracked = subprocess.run(
+                ["git", "-C", REPO, "ls-files", "--error-unmatch", os.path.relpath(m, REPO)],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            self.assertNotEqual(0, tracked.returncode, f"模型文件被 Git 跟踪：{m}")
 
     def test_chinese_font_present(self):
         font = os.path.join(WEIGHTS, "simhei.ttf")

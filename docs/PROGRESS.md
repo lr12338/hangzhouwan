@@ -4,12 +4,12 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-21 |
+| 最后更新 | 2026-07-21（x86 F32 转换检查） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment`（由 `main` `56d380f` 创建，11 本地提交，未 push） |
-| HEAD | `bf031af` |
-| 当前阶段 | **阶段2 板端就绪，⛔ 阻塞于 x86 bmodel 转换** |
+| HEAD | `a685ec2`（本 x86 同步副本转换前） |
+| 当前阶段 | **阶段2 F32 转换准备完成，⛔ Docker Registry / 真实板端同步阻塞** |
 | 总体健康度 | 🟡 阶段1 闭合，阶段2 待 x86 解阻塞 |
 
 ---
@@ -64,8 +64,9 @@
 - [x] 测试：新增 ONNX 审计回归测试（2 项），总计 26 项通过
 
 **待执行（x86，使用本阶段脚本）：**
-- [ ] 运行 `convert_bmodel.sh` 产出 `weights/yolov7_ship_1684_f32.bmodel` 与 `weights/yolov7_ship_1684_int8.bmodel`
-- [ ] 将 bmodel 拷回板端 `weights/`
+- [ ] 使用固定 digest 的 Sophgo TPU-MLIR 镜像运行 `MODE=f32 tools/convert_model/convert_bmodel.sh`，产出 `artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`
+- [ ] 使用真实板端工作区的校准图片完成 ONNX/MLIR F32 原始 Tensor 验证
+- [ ] 将 F32 交付包复制回板端并校验 SHA256
 
 **待执行（板端，bmodel 到位后）：**
 - [ ] `bmrt_test --bmodel ..._1684_f32.bmodel` 与 `bmrt_load_test ..._1684_f32.bmodel` 验证加载（满足"最小 C++ 加载成功"门禁）
@@ -83,6 +84,8 @@
 | B3 | x86 模型转换工具链未就位 | 阶段2 | x86 主机 + 与 libsophon 0.4.9 兼容的 TPU-MLIR | 用户/运维 |
 | B4 | 本任务操作机即 SoC 本身，非 x86 开发机 | 阶段2/9 | 明确 x86 开发机接入方式 | 用户 |
 | B5 | 仓库历史含真实凭据（public） | 运维 | 按 `credential-rotation-checklist.md` 轮换凭据 | 用户/运维 |
+| B6 | 官方 TPU-MLIR Docker Registry 不可达 | 阶段2 | 恢复 Registry 或提供 Sophgo 发布的固定 digest 离线镜像 | 运维 |
+| B7 | x86 同步副本没有 `testdata/calibration/` 且未提供板端 IP | 阶段2 | 提供 SSH 地址后 rsync 真实工作区 | 用户/运维 |
 
 > 阶段1 的 B1/B2（三模型缺失）已于阶段2 解除（用户补齐模型）。
 

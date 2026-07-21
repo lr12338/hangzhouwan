@@ -6,10 +6,16 @@ import os
 import sys
 import copy
 import unittest
+import importlib.util
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-import yaml
-from tools.validate_config import validate, load_and_validate
+HAS_PYYAML = importlib.util.find_spec("yaml") is not None
+if HAS_PYYAML:
+    import yaml
+    from tools.validate_config import validate, load_and_validate
+else:
+    yaml = None
+    validate = load_and_validate = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLE = os.path.normpath(os.path.join(HERE, "..", "..", "config", "application.example.yaml"))
@@ -20,6 +26,7 @@ def load_example():
         return yaml.safe_load(f)
 
 
+@unittest.skipUnless(HAS_PYYAML, "未安装 PyYAML，跳过配置 YAML 校验测试")
 class ValidateConfigTest(unittest.TestCase):
     def test_example_yaml_syntax_ok(self):
         errors, warnings, data = load_and_validate(EXAMPLE)
