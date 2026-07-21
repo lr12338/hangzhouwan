@@ -2,7 +2,8 @@
 
 ## 当前状态：2026-07-21
 
-项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证和单图 C++ 推理 PoC。
+项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证、单图 C++ 推理 PoC、阶段4 单路硬件视频管线功能。
+2h 稳定性门禁待环境时间执行。
 
 ## 已完成
 
@@ -55,12 +56,32 @@ LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
 
 板端 F32 单图推理、后处理和绘框功能已通过。**最终检测框精度仍需与同图 ONNX 基线 JSON 对照**。当前无 x86 基线 JSON。
 
+## 阶段4：单路硬件视频管线（🔶 功能通过，2h 门禁待执行）
+
+```bash
+LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib \
+  ./build/single_video_infer \
+  --input testdata/test.mp4 \
+  --output artifacts/stage4/output_single_stream.mp4 \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --device 0 --decoder h264_bm --encoder h264_bm \
+  --output-fps 10 --inference-fps 5 --queue-size 1 --loop 1
+```
+
+稳定性测试：
+```bash
+./tools/video_inference/stability_test.sh 5    # 5 分钟冒烟
+./tools/video_inference/stability_test.sh 30   # 30 分钟中等
+./tools/video_inference/stability_test.sh 120  # 2 小时最终门禁
+```
+
 ## 待完成
 
 - 与 x86 ONNX 基线 JSON 进行精度对照
-- 阶段4：单路硬件视频管线 PoC（RTSP）
+- 阶段4.1：BMCV/VPP 硬件预处理（解决 CPU 预处理瓶颈，输出 10fps）
+- 阶段4：2h 稳定性门禁真实执行
 - 后续：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
 
 ## 执行红线（始终遵守）
 
-禁止：安装 TPU-MLIR、Python SAIL、Torch/CUDA、修改 libsophon、INT8 转换、连接生产 RTSP/MQTT/RTMP、修改 systemd、硬编码输出名为 `output`、伪造测试结果。
+禁止：安装 TPU-MLIR、Python SAIL、Torch/CUDA、修改 libsophon、INT8 转换、连接生产 RTSP/MQTT/RTMP/启动双路/INT8、修改 systemd、硬编码输出名为 `output`、伪造测试结果。

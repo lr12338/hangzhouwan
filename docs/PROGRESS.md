@@ -4,13 +4,13 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-21（阶段2B 板端验证 + 阶段3 单图 C++ PoC 完成） |
+| 最后更新 | 2026-07-21（阶段4 单路硬件视频管线 PoC 功能通过，2h 门禁待执行） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
-| HEAD | `9255f27`（feat: 提交BM1684 F32部署模型）+ 本地未提交修改 |
-| 当前阶段 | **阶段3 单图 C++ 推理 PoC 完成** |
-| 总体健康度 | 🟢 阶段2 闭合，阶段3 完成 |
+| HEAD | `8e3217e` + 阶段4 未提交修改 |
+| 当前阶段 | **阶段4 单路硬件视频管线 PoC 功能通过，2h 门禁待执行** |
+| 总体健康度 | 🟢 阶段3 闭合，阶段4 功能通过/2h 待执行 |
 
 ---
 
@@ -23,7 +23,7 @@
 | 2 | ONNX 审计 + bmodel 转换 | ✅ 完成 | x86 F32 转换和数值验证通过 | `9255f27` 提交，bmodel 已跟踪 |
 | 2B | 板端 bmodel 加载与兼容性验证 | ✅ 完成 | bmrt_test + bmrt_load_test 通过 | F32 bmodel SHA256 一致，板端真实加载正常 |
 | 3 | 单图 C++ 推理 PoC | ✅ 完成 | 单图 PoC 通过 | 精度对照待 x86 基线 |
-| 4 | 单路硬件视频管线 PoC | ⏳ 待启动 | 单路稳定 2h | 待阶段3 |
+| 4 | 单路硬件视频管线 PoC | 🔶 功能通过/2h 门禁待执行 | 单路稳定 2h | 5min 测试已过，2h 待环境 |
 | 5 | 坐标映射 + AIS 迁移 | ⏳ | 关联不低于旧版 | 待阶段4 |
 | 6 | 双路 Pipeline 整合 | ⏳ | 双路运行 | 待阶段5 |
 | 7 | 生产部署 + 无人值守 | ⏳ | 部署就绪 | 待阶段6 |
@@ -108,3 +108,61 @@
 
 > 阶段1 的 B1/B2（三模型缺失）已于阶段2 解除。
 > 阶段2 的历史阻塞（`weights/best.onnx` 缺失、bmodel 未生成、无测试图片）均已解除。
+
+---
+
+## 5. 阶段4：单路硬件视频管线 PoC（🔶 功能通过，2h 门禁待执行）
+
+参见 `docs/17-stage4-single-video-hardware-pipeline.md` 与 `docs/18-stage4-stability-test.md`。
+
+### 新增代码
+
+| 模块 | 文件 |
+|---|---|
+| 视频源（h264_bm 解码） | `include/video/video_source.h`, `src/video/sophon_ffmpeg_source.cpp` |
+| 视频输出（h264_bm 编码+MP4/TS 封装） | `include/video/video_sink.h`, `src/video/sophon_ffmpeg_sink.cpp` |
+| 最新帧队列（容量1，丢旧帧） | `include/video/latest_frame_queue.h` |
+| 视频帧结构 | `include/video/video_frame.h` |
+| FFmpeg C++ 兼容（extern "C"） | `include/video/ffmpeg_compat.h` |
+| 检测快照（TTL 复用） | `include/pipeline/detection_snapshot.h` |
+| 单路管线（三线程） | `include/pipeline/single_stream_pipeline.h`, `src/pipeline/single_stream_pipeline.cpp` |
+| 指标统计 | `include/monitoring/pipeline_metrics.h`, `src/monitoring/pipeline_metrics.cpp` |
+| CLI 工具 | `tools/video_inference/single_video_infer.cpp` |
+| 稳定性测试脚本 | `tools/video_inference/stability_test.sh` |
+| 单元测试 | `tests/unit_cpp/test_latest_frame_queue.cpp`, `test_detection_snapshot.cpp`, `test_pipeline_timing.cpp` |
+| 文档 | `docs/17-stage4-single-video-hardware-pipeline.md`, `docs/18-stage4-stability-test.md` |
+
+### 核心结论
+
+- **硬件解码**：Sophon-FFmpeg C API `h264_bm`，输出 NV12（host 可读写 mmap'd bm_image）
+- **硬件编码**：Sophon-FFmpeg C API `h264_bm`，接受解码 AVFrame（bm_image），in-place 像素修改对编码器可见
+- **解码缓冲池**：`extra_frame_buffer_num=20`（经 AVDictionary 传入），避免编码器 11 帧保留导致的 bm_image 池死锁
+- **预处理优化**：用 `sws_scale` 一次完成 NV12 960×544 → RGB 640×640（SIMD），绕开 CPU `resize_bilinear` 瓶颈（54.6ms → 22.3ms）
+- **队列策略**：`LatestFrameQueue<VideoFrame>` 模板，容量1，`push` 满时丢最旧帧并 release（归还 bm_image）
+- **检测复用**：`DetectionSnapshot` + TTL（1000ms），非推理帧复用最近结果绘框
+- **响应信号**：`SIGINT`/`SIGTERM` 优雅停止，关闭队列并释放全部资源
+
+### 测试结果
+
+| 测试 | 结果 |
+|---|---|
+| 单元测试（4 项：队列/快照/管线调度/后处理） | ✅ 全部通过 |
+| 单图基线回归（10 项） | ✅ 全部通过 |
+| Python 测试（26 项） | ✅ 全部通过 |
+| 10s 短跑（h264_bm 解码+编码+推理+绘框） | ✅ 退出码 0，输出可解码，含检测框 |
+| 5min 冒烟测试 | ✅ 退出码 0，队列≤1，延迟 P95 < 500ms，无内存泄漏 |
+| 30min 中等测试 | ⏳ 可执行（`./stability_test.sh 30`） |
+| 2h 最终门禁 | ⏳ 提供可执行脚本（`./stability_test.sh 120`），未真实执行 |
+
+### 已知限制
+
+- **CPU 预处理瓶颈**：当前 sws_scale NV12→RGB 640×640 + NCHW 约 22ms/帧，加上 sws_scale 960×544 转换与绘框开销，总处理约 200ms/帧，制约输出帧率至约 5fps（低于 10fps 目标）。阶段4.1 优化方向：BMCV/VPP 硬件预处理（NV12 960×544 → 640×640 → BGR/NCHW 直连设备内存）。
+- **解码器警告**：`pkt can't be sent to decoder` 出现在循环 seek 期间，为 BM 视频解码器内部缓冲池回收提示，不影响功能。
+
+### 回滚方法
+
+- 阶段4 所有新增 C++ 源码位于 `include/video/`、`include/pipeline/`、`include/monitoring/`、`src/video/`、`src/pipeline/`、`src/monitoring/`、`tools/video_inference/`、`tests/unit_cpp/test_*.cpp`（除 `test_yolov7_postprocess.cpp`）。
+- 不修改 `src/inference/`、`src/image_io/`、`src/util/` 与 `tools/image_inference/`。
+- CMakeLists.txt 增量添加，可独立 revert。
+- `docs/17`、`docs/18` 独立文档。
+- 回滚单次提交即可恢复至阶段3 基线。
