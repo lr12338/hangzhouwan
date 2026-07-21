@@ -68,3 +68,9 @@ testdata/calibration/*.png
 # 编译产物（仅提交源码，二进制可再生）
 tools/image_inference/bmrt_load_test
 tools/chip_info/chip_info
+
+# 阶段3 C++ 编译产物（CMake 构建）
+build/
+tools/image_inference/single_image_infer
+tests/unit_cpp/test_postprocess
+*.o

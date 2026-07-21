@@ -2,31 +2,65 @@
 
 ## 当前状态：2026-07-21
 
-项目根目录为 `/home/huangchao/hangzhouwan/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），本任务路线仅为 F32，禁止 BM1684X、FP16、INT8、板端加载、网络流和 systemd 修改。
+项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证和单图 C++ 推理 PoC。
 
-离线归档 `/home/huangchao/tpu-mlir-offline/tpuc_dev_v3.4.tar.gz` 已验证本地 SHA256：
+## 已完成
 
-```text
-d83e2cb55bc279076e516597363429c9bab76aae7999260046a786220b4819ac
+### 阶段2：F32 bmodel 转换与 x86 验证
+- F32 bmodel 已生成：`artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`（24,428,544 字节）
+- Git 提交 `9255f27`（bmodel 已跟踪，`git ls-files` 确认）
+- SHA256：`d1c295c504888541c27e20fda500976725b9d13b6ef5c91842f247f52c31cfcd`
+- ONNX/MLIR 172 个 Tensor 数值验证通过；bmodel cmodel 比较通过
+
+### 阶段2B：板端 bmodel 真实加载
+- `bmrt_test` 加载成功（退出码 0）
+- `bmrt_load_test` 编译运行成功（退出码 0）
+- 网络 `yolov7_ship`：输入 `images [1,3,640,640] FLOAT32`，输出 `output_Concat [1,25200,6] FLOAT32`
+- 输出名动态读取（非硬编码 `output`）
+- 无兼容性错误，TPU 资源正常释放
+
+### 阶段3：单图 C++ 推理 PoC
+- 代码结构：`include/inference/` + `src/inference/` + `include/image_io/` + `src/image_io/`
+- 预处理：libjpeg 解码(RGB) → 直接 resize 640×640 → /255 → NCHW FLOAT32（与 Python 一致）
+- 后处理：obj_conf 过滤 → score 过滤 → 坐标映射 → NMS（与 detector.py 一致）
+- 单元测试：10 项全部通过
+- 单图推理：frame_30.jpg 检测到 2 艘船（预处理 56ms，推理 16ms，后处理 0.6ms）
+- 100 次重复推理：平均 15.99ms，框数稳定，无内存泄漏
+- Python 测试：26 项全部通过
+
+## 构建
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
+
+# 单图推理
+LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
+  ./build/single_image_infer \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --image testdata/model_test/frame_30.jpg \
+  --output result.jpg --json result.json \
+  --conf 0.1 --iou 0.1 --device 0
+
+# 100 次重复推理
+LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
+  ./build/single_image_infer \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --image testdata/model_test/frame_30.jpg \
+  --conf 0.1 --iou 0.1 --device 0 --loop 100
 ```
 
-镜像已导入为 `sophgo/tpuc_dev:v3.4`，并标记 `local/tpuc_dev:v3.4`。其 ID 为 `sha256:d73afc9614a7e78e69dca61a9b7ac84ee9598c942571ea557c603850c5df59a1`，架构为 `amd64`，系统为 `linux`。
+## 精度声明
 
-## 现有阻塞
+板端 F32 单图推理、后处理和绘框功能已通过。**最终检测框精度仍需与同图 ONNX 基线 JSON 对照**。当前无 x86 基线 JSON。
 
-1. `docker load` 后立即根分区可用空间曾为 9.4 GB，最终复核为 16 GB；每次转换开始前仍须确认至少保留 10 GB。
-2. 用户提供的官方 `tpu_mlir-1.28.1` wheel 已校验并安装；`model_transform.py`、`model_deploy.py`、`model_runner.py`、`npz_tool.py` 和 `model_tool` 均可用。
-3. 受控模型 `weights/best.onnx` 已从旧路径校验后复制，SHA256 为 `101f8e19c680eb4fd2446521f983b11ada35052bce56f30c2ddcf5df64894f92`。
-4. 已有测试图片 `testdata/model_test/frame_000010.jpg`，由本地测试视频通过容器 OpenCV 生成。
+## 待完成
 
-因此没有 bmodel、数值比较、模型清单、交付包或板端结果。任何接手者都不得伪造这些结果。
+- 与 x86 ONNX 基线 JSON 进行精度对照
+- 阶段4：单路硬件视频管线 PoC（RTSP）
+- 后续：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
 
-## 已复核的转换约束
+## 执行红线（始终遵守）
 
-`tools/convert_model/convert_bmodel.sh` 通过 `bash -n`，默认 F32 分支使用 `set -euo pipefail`、`--processor BM1684`、`--input_shapes [[1,3,640,640]]`、输入 `images`、输出 `output` 和 `--quantize F32`。INT8 仅会在显式 `MODE=int8` 时进入，本任务不得执行。原 `detector.py` 使用 BGR 转 RGB、直接 resize 640x640、`/255`、NCHW，无 letterbox。
-
-## 解除后顺序
-
-先满足空间、官方工具、`weights/best.onnx` 和测试图片四项条件；随后只运行 F32 转换、`model_tool --info` 和 x86 原始输出 Tensor 数值比较。比较通过后生成交付包。不要自动继续 INT8、板端、单图 C++ 推理或任何流服务。
-
-修改后运行 `python3 tests/run_tests.py`、`git diff --check`，只本地提交，不执行 push。新增日志和报告使用中文。
+禁止：安装 TPU-MLIR、Python SAIL、Torch/CUDA、修改 libsophon、INT8 转换、连接生产 RTSP/MQTT/RTMP、修改 systemd、硬编码输出名为 `output`、伪造测试结果。
