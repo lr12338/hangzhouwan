@@ -56,7 +56,7 @@ LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
 
 板端 F32 单图推理、后处理和绘框功能已通过。**最终检测框精度仍需与同图 ONNX 基线 JSON 对照**。当前无 x86 基线 JSON。
 
-## 阶段4：单路硬件视频管线（🔶 功能通过，2h 门禁待执行）
+## 阶段4：单路硬件视频管线（🔶 功能与30min通过，2h 门禁待执行）
 
 ```bash
 LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib \
@@ -74,6 +74,8 @@ LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/
 ./tools/video_inference/stability_test.sh 30   # 30 分钟中等
 ./tools/video_inference/stability_test.sh 120  # 2 小时最终门禁
 ```
+
+稳定性测试结果：5min 冒烟 ✅ 通过；30min 中等 ✅ 通过（15min 稳态分析：RSS 24.7MB 零增长、TPU 75M/550M 稳定、输出 ~5fps、P95 ~391ms 无漂移）；2h 最终门禁 ⏳ 待执行。
 
 ## 待完成
 
