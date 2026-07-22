@@ -95,11 +95,60 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 启动双路应用
+# 生成临时开发配置（生产使用 /etc/hangzhouwan/application.yaml）
+DEV_CONFIG="$LOG_DIR/dev_test_config.yaml"
+cat > "$DEV_CONFIG" <<CFGEOF
+application:
+  environment: development
+inference:
+  model_path: "$ROOT_DIR/artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel"
+  device: 0
+  confidence_threshold: 0.1
+  iou_threshold: 0.1
+streams:
+  - id: A
+    enabled: true
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    coordinate_model: "$ROOT_DIR/weights/0121_random_forest_model.pkl"
+    output_fps: 10
+    inference_fps: 5
+    output_bitrate_kbps: 800
+    gop: 20
+    jitter_buffer_size: 5
+    forbidden_rectangles: [[1480, 0, 2560, 630]]
+    forbidden_polygons: [[[0, 0], [0, 640], [710, 620]]]
+  - id: B
+    enabled: true
+    input_url_env: STREAM_B_INPUT_URL
+    output_url_env: STREAM_B_OUTPUT_URL
+    coordinate_model: "$ROOT_DIR/weights/beishang_x-l.pkl"
+    output_fps: 10
+    inference_fps: 5
+    output_bitrate_kbps: 800
+    gop: 20
+    forbidden_rectangles: [[0, 0, 2560, 210]]
+    forbidden_polygons: [[[2160, 210], [2560, 280], [2560, 210]]]
+business:
+  coordinate_mode: sklearn
+  model_a_path: "$ROOT_DIR/weights/0121_random_forest_model.pkl"
+  model_b_path: "$ROOT_DIR/weights/beishang_x-l.pkl"
+  socket_path: "$SOCK"
+  ais_max_distance_m:
+    A: 500
+    B: 500
+runtime:
+  decoder: h264_bm
+  encoder: h264_bm
+  preprocess: bmcv
+  draw_mode: bmcv
+CFGEOF
+
+# 启动双路应用（配置驱动）
 ./build/dual_stream_app \
+  --config "$DEV_CONFIG" \
   --max-seconds $DURATION \
   --metrics-interval 10 \
-  --jitter-buffer-size 5 \
   --enable-business \
   --business-socket "$SOCK" \
   2>&1 | tee -a "$LOG_FILE"

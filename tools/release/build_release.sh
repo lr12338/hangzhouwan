@@ -1,0 +1,127 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+# 构建不可变 Release 制品。
+#
+# 用法：
+#   bash tools/release/build_release.sh [version]
+#
+# 生成 /opt/hangzhouwan/releases/<version>-<commit>/ 包含：
+#   bin/dual_stream_app, bin/hzwctl, venv/, models/, systemd/, config/,
+#   services/, VERSION, manifest.json, sha256sum.txt
+#
+# 不自动 activate。不依赖 Git 工作区运行生产服务。
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+RELEASE_ROOT="/opt/hangzhouwan/releases"
+GIT_COMMIT="$(cd "$REPO_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+VERSION="${1:-$(date +%Y%m%d%H%M)}"
+RELEASE_NAME="${VERSION}-${GIT_COMMIT}"
+RELEASE_DIR="${RELEASE_ROOT}/${RELEASE_NAME}"
+
+echo "=== 构建 Release: ${RELEASE_NAME} ==="
+
+# 1. 编译 C++ 二进制
+echo "[1/7] 编译 C++ 二进制..."
+cd "$REPO_ROOT"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -3
+cmake --build build -j4 2>&1 | tail -3
+
+# 2. 创建 Release 目录
+echo "[2/7] 创建 Release 目录..."
+sudo mkdir -p "$RELEASE_DIR"/{bin,models,systemd,config,services}
+sudo chown -R "$(id -u):$(id -g)" "$RELEASE_DIR"
+
+# 3. 复制二进制
+echo "[3/7] 复制二进制..."
+cp "$REPO_ROOT/build/dual_stream_app" "$RELEASE_DIR/bin/"
+# hzwctl（如果已构建）
+if [ -f "$REPO_ROOT/build/hzwctl" ]; then
+  cp "$REPO_ROOT/build/hzwctl" "$RELEASE_DIR/bin/"
+fi
+chmod 0755 "$RELEASE_DIR/bin/"*
+
+# 4. 复制模型
+echo "[4/7] 复制模型..."
+BMODEL="$REPO_ROOT/artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel"
+if [ -f "$BMODEL" ]; then
+  cp "$BMODEL" "$RELEASE_DIR/models/"
+else
+  echo "  警告: bmodel 未找到 $BMODEL"
+fi
+for m in "0121_random_forest_model.pkl" "beishang_x-l.pkl"; do
+  if [ -f "$REPO_ROOT/weights/$m" ]; then
+    cp "$REPO_ROOT/weights/$m" "$RELEASE_DIR/models/"
+  fi
+done
+
+# 5. 复制 systemd / config / services
+echo "[5/7] 复制 systemd / config / services..."
+cp "$REPO_ROOT"/deploy/systemd/*.service "$RELEASE_DIR/systemd/" 2>/dev/null || true
+cp "$REPO_ROOT"/deploy/systemd/*.target "$RELEASE_DIR/systemd/" 2>/dev/null || true
+cp "$REPO_ROOT/config/application.example.yaml" "$RELEASE_DIR/config/"
+cp -r "$REPO_ROOT/services" "$RELEASE_DIR/"
+find "$RELEASE_DIR/services" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 6. 准备 Python venv（离线 wheelhouse 或符号链接到系统 venv）
+echo "[6/7] 准备 Python 环境..."
+if [ -d "/data/hangzhouwan/venv" ]; then
+  # 复用已有 venv
+  echo "  复用 /data/hangzhouwan/venv"
+  ln -sf /data/hangzhouwan/venv "$RELEASE_DIR/venv"
+else
+  # 创建最小 venv
+  python3 -m venv "$RELEASE_DIR/venv" 2>/dev/null || true
+  if [ -f "$REPO_ROOT/services/business_enrichment/requirements.lock" ]; then
+    "$RELEASE_DIR/venv/bin/pip" install -r "$REPO_ROOT/services/business_enrichment/requirements.lock" -q 2>/dev/null || \
+      echo "  警告: venv pip install 失败，请手动安装依赖"
+  fi
+fi
+
+# 7. 生成 VERSION / manifest.json / sha256sum.txt
+echo "[7/7] 生成元数据..."
+cat > "$RELEASE_DIR/VERSION" <<VEREOF
+${RELEASE_NAME}
+commit: ${GIT_COMMIT}
+build_date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+VEREOF
+
+# manifest.json
+BMODEL_SHA=""
+if [ -f "$RELEASE_DIR/models/yolov7_ship_1684_f32.bmodel" ]; then
+  BMODEL_SHA=$(sha256sum "$RELEASE_DIR/models/yolov7_ship_1684_f32.bmodel" | awk '{print $1}')
+fi
+python3 -c "
+import json, os
+d = os.path.join('$RELEASE_DIR')
+files = []
+for root, _, fs in os.walk(d):
+    for f in fs:
+        p = os.path.join(root, f)
+        if os.path.islink(p):
+            continue
+        rel = os.path.relpath(p, d)
+        files.append(rel)
+files.sort()
+manifest = {
+    'version': '${RELEASE_NAME}',
+    'commit': '${GIT_COMMIT}',
+    'bmodel_sha256': '${BMODEL_SHA}',
+    'files': files,
+}
+with open(os.path.join(d, 'manifest.json'), 'w') as fh:
+    json.dump(manifest, fh, indent=2, ensure_ascii=False)
+print('  manifest.json: %d files' % len(files))
+"
+
+# sha256sum.txt（排除 venv 符号链接和 manifest/sha 自身）
+cd "$RELEASE_DIR"
+find . -type f ! -name 'sha256sum.txt' ! -name 'manifest.json' \
+  ! -path './venv/*' -print0 | sort -z | xargs -0 sha256sum > sha256sum.txt
+echo "  sha256sum.txt: $(wc -l < sha256sum.txt) entries"
+
+echo ""
+echo "=== Release 构建完成: ${RELEASE_DIR} ==="
+echo "验证: bash tools/release/verify_release.sh ${RELEASE_DIR}"
+echo "激活: bash tools/release/activate_release.sh ${RELEASE_DIR}"

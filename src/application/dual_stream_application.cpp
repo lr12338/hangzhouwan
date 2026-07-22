@@ -53,22 +53,33 @@ int DualStreamApplication::run(const DualStreamConfig& cfg) {
   exit_code_a_.store(0);
   exit_code_b_.store(0);
 
-  // A/B 同时启动
-  t_a_ = std::thread([this, &cfg] { stream_thread(cfg.stream_a, pipeline_a_, exit_code_a_); });
-  t_b_ = std::thread([this, &cfg] { stream_thread(cfg.stream_b, pipeline_b_, exit_code_b_); });
+  // A/B 按需启动（单路时不启动另一路）
+  if (cfg.run_a) {
+    t_a_ = std::thread([this, &cfg] { stream_thread(cfg.stream_a, pipeline_a_, exit_code_a_); });
+  } else {
+    exit_code_a_.store(0);
+  }
+  if (cfg.run_b) {
+    t_b_ = std::thread([this, &cfg] { stream_thread(cfg.stream_b, pipeline_b_, exit_code_b_); });
+  } else {
+    exit_code_b_.store(0);
+  }
   t_metrics_ = std::thread([this, &cfg] { metrics_loop(cfg); });
 
-  t_a_.join();
-  t_b_.join();
+  if (t_a_.joinable()) t_a_.join();
+  if (t_b_.joinable()) t_b_.join();
   stop_.store(true);
   t_metrics_.join();
 
   int rc_a = exit_code_a_.load();
   int rc_b = exit_code_b_.load();
+  int rc = 0;
+  if (cfg.run_a && rc_a != 0) rc = 1;
+  if (cfg.run_b && rc_b != 0) rc = 1;
   std::fprintf(stdout, "信息 | 双路 | 结束 A退出码=%d B退出码=%d 耗时=%llds\n",
                rc_a, rc_b, static_cast<long long>((now_ms() - start_ms_) / 1000));
   std::fflush(stdout);
-  return (rc_a == 0 && rc_b == 0) ? 0 : 1;
+  return rc;
 }
 
 void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {

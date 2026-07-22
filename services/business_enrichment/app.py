@@ -218,6 +218,10 @@ class BusinessEnrichmentService:
                             "ais_age_ms": m["ais_age_ms"],
                             "extrapolated": m.get("extrapolated", False),
                             "match_score": m.get("match_score", 0),
+                            "ais_lon": m.get("ais_lon", 0),
+                            "ais_lat": m.get("ais_lat", 0),
+                            "ais_lon_aligned": m.get("ais_lon_aligned", 0),
+                            "ais_lat_aligned": m.get("ais_lat_aligned", 0),
                         })
 
         # 证据录制
@@ -258,20 +262,36 @@ class BusinessEnrichmentService:
         for r in results:
             if not r.get("ais_matched"):
                 continue
+            # 检测框
+            det_box = None
+            for d in detections:
+                if d.get("detection_id") == r["detection_id"]:
+                    det_box = {"x1": d.get("x1", 0), "y1": d.get("y1", 0),
+                               "x2": d.get("x2", 0), "y2": d.get("y2", 0),
+                               "score": d.get("score", 0)}
+                    break
             rec = {
                 "time": ts,
                 "stream_id": stream_id,
                 "frame_sequence": frame_seq,
                 "detection_id": r["detection_id"],
-                "longitude": r["longitude"],
-                "latitude": r["latitude"],
+                "detection_box": det_box,
+                # 视觉预测坐标
+                "visual_longitude": r["longitude"],
+                "visual_latitude": r["latitude"],
+                # AIS 原始坐标
+                "ais_lon": r.get("ais_lon", 0),
+                "ais_lat": r.get("ais_lat", 0),
+                # AIS 时间对齐后坐标
+                "ais_lon_aligned": r.get("ais_lon_aligned", 0),
+                "ais_lat_aligned": r.get("ais_lat_aligned", 0),
                 "mmsi": r["mmsi"],
-                "ais_lon": 0,
-                "ais_lat": 0,
-                "distance_m": r.get("ais_distance_km", 0) * 1000,
+                "ship_name": r.get("ship_name", ""),
+                "match_distance_m": r.get("ais_distance_km", 0) * 1000,
                 "ais_age_ms": r.get("ais_age_ms", 0),
-                "score": r.get("match_score", 0),
                 "extrapolated": r.get("extrapolated", False),
+                "match_score": r.get("match_score", 0),
+                "reject_reason": r.get("reject_reason", ""),
             }
             path = os.path.join(self._evidence_dir, stream_id,
                                 f"evidence_{int(ts)}.jsonl")
@@ -407,6 +427,8 @@ class BusinessEnrichmentService:
 
 def main():
     parser = argparse.ArgumentParser(description="杭州湾业务增强服务")
+    parser.add_argument("--config", type=str, default="",
+                        help="application.yaml 配置文件路径")
     parser.add_argument("--mqtt-probe", action="store_true", help="MQTT探测模式")
     parser.add_argument("--seconds", type=int, default=300, help="探测时长（秒）")
     parser.add_argument("--health-only", action="store_true", help="仅输出健康状态")
@@ -414,7 +436,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        config = BusinessConfig()
+        config = BusinessConfig(config_path=args.config if args.config else None)
     except ConfigError as e:
         print(f"致命 | 配置 | {e}", flush=True)
         sys.exit(1)

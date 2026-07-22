@@ -51,6 +51,16 @@ class BmcvProcessor {
   bool draw_rectangles(AVFrame* frame, const std::vector<Detection>& dets,
                        std::string& err);
 
+  // 带颜色的矩形（融合绘制：绿=AIS匹配，黄=坐标有效未匹配，红=业务不可用）。
+  struct ColoredRect {
+    float x1, y1, x2, y2;
+    unsigned char r, g, b;
+  };
+  // 在 AVFrame(NV12) 上 in-place 绘制带颜色的矩形。
+  bool draw_colored_rectangles(AVFrame* frame,
+                               const std::vector<ColoredRect>& rects,
+                               std::string& err);
+
   bool ready() const;
 
  private:

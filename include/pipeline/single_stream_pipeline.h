@@ -30,6 +30,7 @@
 #include "inference/bmrt_detector.h"
 #include "monitoring/pipeline_metrics.h"
 #include "pipeline/detection_snapshot.h"
+#include "pipeline/enriched_snapshot.h"
 #include "video/latest_frame_queue.h"
 #include "video/bmcv_processor.h"
 #include "video/detection_region_filter.h"
@@ -62,6 +63,7 @@ struct PipelineConfig {
   bool enable_business = false;          // 启用业务增强（坐标+AIS）
   std::string business_socket = "/tmp/hangzhouwan-business.sock";
   std::string business_jsonl_path;       // 业务JSONL输出路径（空=不输出）
+  std::string coordinate_mode = "sklearn";  // 坐标模式（JSONL/日志用）
   std::string preprocess = "cpu";   // cpu | bmcv
   std::string draw_mode = "cpu";    // cpu | bmcv | none
   // RTSP 输入（阶段4.2/4.3）
@@ -113,6 +115,7 @@ class SingleStreamPipeline {
   SophonVideoSink sink_;
   std::unique_ptr<BmrtDetector> detector_;
   SnapshotStore snapshot_;
+  EnrichedSnapshotStore enriched_snapshot_;
   PipelineMetrics metrics_;
   BmcvProcessor bmcv_;
   DetectionRegionFilter region_filter_;

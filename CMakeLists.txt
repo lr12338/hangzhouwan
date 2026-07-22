@@ -57,6 +57,7 @@ add_library(hzw_inf STATIC
   src/video/bmcv_processor.cpp
   src/video/detection_region_filter.cpp
   src/config/stream_profile.cpp
+  src/config/application_config.cpp
   src/monitoring/pipeline_metrics.cpp
   src/pipeline/single_stream_pipeline.cpp
   src/application/dual_stream_application.cpp
@@ -144,3 +145,8 @@ add_test(NAME stability_script COMMAND bash ${CMAKE_SOURCE_DIR}/tests/test_stabi
 # 阶段2 门禁：最小 BMRuntime 加载验证
 add_executable(bmrt_load_test tools/image_inference/bmrt_load_test.cpp)
 target_link_libraries(bmrt_load_test PRIVATE bmrt_runtime)
+
+# 阶段4.5 ApplicationConfig 配置加载单元测试（纯逻辑，无需硬件）
+add_executable(test_application_config tests/unit_cpp/test_application_config.cpp)
+target_link_libraries(test_application_config PRIVATE hzw_inf)
+add_test(NAME application_config COMMAND test_application_config)

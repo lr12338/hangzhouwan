@@ -142,6 +142,23 @@ bool BmcvProcessor::draw_rectangles(AVFrame* frame, const std::vector<Detection>
   if (!p_ || !p_->ready) { err = "BMCV: 未初始化"; return false; }
   if (dets.empty()) return true;
 
+  std::vector<ColoredRect> rects;
+  rects.reserve(dets.size());
+  for (const auto& d : dets) {
+    ColoredRect r;
+    r.x1 = d.x1; r.y1 = d.y1; r.x2 = d.x2; r.y2 = d.y2;
+    r.r = 0; r.g = 255; r.b = 0;  // 绿色
+    rects.push_back(r);
+  }
+  return draw_colored_rectangles(frame, rects, err);
+}
+
+bool BmcvProcessor::draw_colored_rectangles(AVFrame* frame,
+                                            const std::vector<ColoredRect>& rects,
+                                            std::string& err) {
+  if (!p_ || !p_->ready) { err = "BMCV: 未初始化"; return false; }
+  if (rects.empty()) return true;
+
   bm_handle_t h = p_->handle;
   bm_status_t st;
 
@@ -150,12 +167,12 @@ bool BmcvProcessor::draw_rectangles(AVFrame* frame, const std::vector<Detection>
   st = bm_image_copy_host_to_device(p_->draw_img, host_planes);
   if (st != BM_SUCCESS) { err = "BMCV draw: H2D 失败"; return false; }
 
-  // 2) BMCV draw_rectangle（线宽 3，绿色）
-  for (const auto& d : dets) {
-    int x1 = static_cast<int>(d.x1);
-    int y1 = static_cast<int>(d.y1);
-    int x2 = static_cast<int>(d.x2);
-    int y2 = static_cast<int>(d.y2);
+  // 2) BMCV draw_rectangle（线宽 3，按状态着色）
+  for (const auto& r : rects) {
+    int x1 = static_cast<int>(r.x1);
+    int y1 = static_cast<int>(r.y1);
+    int x2 = static_cast<int>(r.x2);
+    int y2 = static_cast<int>(r.y2);
     if (x2 <= x1 || y2 <= y1) continue;
     if (x1 < 0) x1 = 0; if (y1 < 0) y1 = 0;
     if (x2 > p_->src_w) x2 = p_->src_w; if (y2 > p_->src_h) y2 = p_->src_h;
@@ -164,7 +181,7 @@ bool BmcvProcessor::draw_rectangles(AVFrame* frame, const std::vector<Detection>
     rect.start_y = y1;
     rect.crop_w = x2 - x1;
     rect.crop_h = y2 - y1;
-    st = bmcv_image_draw_rectangle(h, p_->draw_img, 1, &rect, 3, 0, 255, 0);
+    st = bmcv_image_draw_rectangle(h, p_->draw_img, 1, &rect, 3, r.r, r.g, r.b);
     if (st != BM_SUCCESS) { err = "BMCV draw: draw_rectangle 失败"; return false; }
   }
 

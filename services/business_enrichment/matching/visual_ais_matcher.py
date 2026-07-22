@@ -133,29 +133,35 @@ class VisualAisMatcher:
                     continue
                 if ais_age_sec > self.data_timeout_sec:
                     continue
-                ais_lon = ais_dict.get("lon", 0)
-                ais_lat = ais_dict.get("lat", 0)
+                ais_lon_raw = ais_dict.get("lon", 0)
+                ais_lat_raw = ais_dict.get("lat", 0)
                 speed = ais_dict.get("speed", 0)
                 course = ais_dict.get("course", 0)
                 # 外推到视频帧时间
                 extrapolated = False
+                ais_lon_aligned = ais_lon_raw
+                ais_lat_aligned = ais_lat_raw
                 if ais_age_sec > 1 and speed and speed > 0:
                     delta = ais_age_sec
                     if delta <= self.max_extrapolation_sec:
-                        ais_lon, ais_lat = extrapolate_position(
-                            ais_lon, ais_lat, speed, course, delta
+                        ais_lon_aligned, ais_lat_aligned = extrapolate_position(
+                            ais_lon_raw, ais_lat_raw, speed, course, delta
                         )
                         extrapolated = True
-                dist_m = haversine_m(det_lon, det_lat, ais_lon, ais_lat)
+                dist_m = haversine_m(det_lon, det_lat, ais_lon_aligned, ais_lat_aligned)
                 if dist_m <= max_dist_m:
-                    candidates.append((dist_m, det_id, mmsi, ais_dict, extrapolated, ais_age_sec))
+                    candidates.append((dist_m, det_id, mmsi, ais_dict,
+                                       extrapolated, ais_age_sec,
+                                       ais_lon_raw, ais_lat_raw,
+                                       ais_lon_aligned, ais_lat_aligned))
 
         # 全局距离排序匹配
         candidates.sort(key=lambda x: x[0])
         matched_dets = set()
         matched_mmsi = set()
         results = {}
-        for dist_m, det_id, mmsi, ais_dict, extrapolated, ais_age_sec in candidates:
+        for (dist_m, det_id, mmsi, ais_dict, extrapolated, ais_age_sec,
+              ais_lon_raw, ais_lat_raw, ais_lon_aligned, ais_lat_aligned) in candidates:
             if det_id in matched_dets or mmsi in matched_mmsi:
                 continue
             matched_dets.add(det_id)
@@ -175,6 +181,10 @@ class VisualAisMatcher:
                 "speed": ais_dict.get("speed", 0),
                 "course": ais_dict.get("course", 0),
                 "ship_name": ais_dict.get("ship_name", ""),
+                "ais_lon": round(ais_lon_raw, 6),
+                "ais_lat": round(ais_lat_raw, 6),
+                "ais_lon_aligned": round(ais_lon_aligned, 6),
+                "ais_lat_aligned": round(ais_lat_aligned, 6),
             }
         return results
 

@@ -1,24 +1,30 @@
 [Unit]
-Description=Hangzhou Bay Business Enrichment Service
+Description=Hangzhou Bay Business Enrichment Service (Sidecar)
 After=network-online.target
 Wants=network-online.target
+PartOf=hangzhouwan.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=linaro
 Group=linaro
-WorkingDirectory=/home/linaro/hangzhouwan-orign/hangzhouwan
-EnvironmentFile=/data/hangzhouwan/config/business.env
-ExecStart=/data/hangzhouwan/venv/bin/python3 -m services.business_enrichment.app
+WorkingDirectory=/opt/hangzhouwan/current
+EnvironmentFile=/etc/hangzhouwan/business.env
+ExecStart=/opt/hangzhouwan/current/venv/bin/python3 -m services.business_enrichment.app
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
-LimitNOFILE=1024
+LimitNOFILE=4096
 KillSignal=SIGTERM
-TimeoutStopSec=10
+TimeoutStartSec=30
+TimeoutStopSec=15
+RuntimeDirectory=hangzhouwan
+RuntimeDirectoryMode=0755
+StateDirectory=hangzhouwan
+LogsDirectory=hangzhouwan
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=hangzhouwan.target

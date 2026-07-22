@@ -19,6 +19,30 @@ int64_t now_ms() {
 }
 double ms_between(int64_t a, int64_t b) { return static_cast<double>(b - a); }
 
+// JSON 字符串转义（用于 JSONL 输出）。
+std::string escape_json_str(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (char ch : s) {
+    switch (ch) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(ch) < 0x20) {
+          char buf[8];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", ch);
+          out += buf;
+        } else {
+          out += ch;
+        }
+    }
+  }
+  return out;
+}
+
 bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
                             std::vector<float>& out) {
   if (rgb.width != input_w || rgb.height != input_h) return false;
@@ -448,6 +472,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     if (!vf.frame) continue;
     if (vf.source_epoch != last_epoch_) {
       snapshot_.clear();
+      enriched_snapshot_.clear();
       last_epoch_ = vf.source_epoch;
       last_infer_ms_ = 0;
     }
@@ -514,6 +539,15 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           snap.detections = std::move(dets);
           snapshot_.update(snap);
           // 业务增强：坐标预测 + AIS 匹配（不阻塞视频路径）
+          // 处理顺序：检测 -> NMS -> 禁区过滤 -> Sidecar 批量增强 ->
+          //           EnrichedSnapshot 更新 -> 绘框 -> 编码推流
+          EnrichedDetectionSnapshot esnap;
+          esnap.source_sequence = vf.sequence;
+          esnap.source_pts = vf.pts;
+          esnap.generated_time_ms = t3;
+          esnap.coordinate_mode = cfg.coordinate_mode;
+          esnap.enrichment_status = EnrichmentState::DETECTION_ONLY;
+
           if (business_client_) {
             std::vector<DetectionBox> boxes;
             const auto& sd = snap.detections;
@@ -526,31 +560,86 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
               boxes.push_back(b);
             }
             std::vector<BusinessResult> bres;
-            business_client_->enrich(cfg.stream_id, vf.sequence, source_w_, source_h_,
-                                     boxes, bres, 30);
-            if (business_jsonl_ && !bres.empty()) {
-              std::fprintf(business_jsonl_,
-                  "{\"sid\":\"%s\",\"seq\":%lld,\"n\":%zu",
-                  cfg.stream_id.c_str(), static_cast<long long>(vf.sequence), bres.size());
+            bool enrich_ok = business_client_->enrich(
+                cfg.stream_id, vf.sequence, source_w_, source_h_,
+                boxes, bres, 30);
+            // 融合 Detection + BusinessResult（按 detection_id 索引）
+            for (size_t i = 0; i < sd.size(); ++i) {
+              const BusinessResult* rp = nullptr;
               for (const auto& r : bres) {
-                std::fprintf(business_jsonl_,
-                    ",{\"lon\":%.6f,\"lat\":%.6f,\"v\":%d,\"m\":%d,\"mmsi\":\"%s\"}",
-                    r.longitude, r.latitude, r.coordinate_valid ? 1 : 0,
-                    r.ais_matched ? 1 : 0, r.mmsi.c_str());
+                if (r.detection_id == static_cast<int>(i)) { rp = &r; break; }
               }
-              std::fprintf(business_jsonl_, "}\n");
+              if (rp) {
+                esnap.detections.emplace_back(sd[i], *rp);
+              } else {
+                esnap.detections.emplace_back(sd[i]);
+              }
+            }
+            esnap.enrichment_status = business_client_->state();
+            // 写入合法 JSONL
+            if (business_jsonl_ && !esnap.detections.empty()) {
+              std::string j;
+              j.reserve(512);
+              j += "{\"stream_id\":\"" + escape_json_str(cfg.stream_id) + "\"";
+              j += ",\"frame_sequence\":" + std::to_string(vf.sequence);
+              j += ",\"timestamp_ms\":" + std::to_string(t3);
+              j += ",\"coordinate_mode\":\"" + escape_json_str(cfg.coordinate_mode) + "\"";
+              j += ",\"enrichment_status\":\"" + std::string(enrichment_status_str(esnap.enrichment_status)) + "\"";
+              j += ",\"detections\":[";
+              for (size_t i = 0; i < esnap.detections.size(); ++i) {
+                const auto& e = esnap.detections[i];
+                if (i > 0) j += ",";
+                char buf[1024];
+                std::snprintf(buf, sizeof(buf),
+                    "{\"detection_id\":%d,\"x1\":%.1f,\"y1\":%.1f,\"x2\":%.1f,\"y2\":%.1f,"
+                    "\"score\":%.3f,\"longitude\":%.6f,\"latitude\":%.6f,"
+                    "\"coordinate_valid\":%s,\"ais_matched\":%s,"
+                    "\"speed\":%.2f,\"course\":%.2f,\"ais_distance_m\":%.2f,"
+                    "\"ais_age_ms\":%lld,\"match_score\":%.4f,\"extrapolated\":%s,"
+                    "\"enrichment_status\":\"%s\"",
+                    e.detection_id, e.x1, e.y1, e.x2, e.y2, e.score,
+                    e.longitude, e.latitude,
+                    e.coordinate_valid ? "true" : "false",
+                    e.ais_matched ? "true" : "false",
+                    e.speed, e.course, e.ais_distance_m,
+                    static_cast<long long>(e.ais_age_ms), e.match_score,
+                    e.extrapolated ? "true" : "false",
+                    enrichment_status_str(e.enrichment_status));
+                j += buf;
+                j += ",\"mmsi\":\"" + escape_json_str(e.mmsi) + "\"";
+                j += ",\"ship_name\":\"" + escape_json_str(e.ship_name) + "\"";
+                j += ",\"reject_reason\":\"" + escape_json_str(e.reject_reason) + "\"";
+                if (e.ais_matched) {
+                  std::snprintf(buf, sizeof(buf),
+                      ",\"ais_lon\":%.6f,\"ais_lat\":%.6f,"
+                      "\"ais_lon_aligned\":%.6f,\"ais_lat_aligned\":%.6f",
+                      e.ais_lon, e.ais_lat, e.ais_lon_aligned, e.ais_lat_aligned);
+                  j += buf;
+                }
+                j += "}";
+              }
+              j += "]}\n";
+              std::fwrite(j.data(), 1, j.size(), business_jsonl_);
               std::fflush(business_jsonl_);
             }
+            (void)enrich_ok;
+          } else {
+            // 未启用业务增强：仅检测
+            for (const auto& d : snap.detections) {
+              esnap.detections.emplace_back(d);
+            }
           }
+          enriched_snapshot_.update(esnap);
         } else {
           set_error(7, "推理失败: " + detector_->last_error());
         }
       }
     }
 
-    // 绘框
-    DetectionSnapshot snap = snapshot_.get();
-    const bool has_draw = !snap.expired(proc_start, cfg.result_ttl_ms) && !snap.detections.empty();
+    // 绘框（使用融合快照，区分 AIS 匹配状态着色）
+    // 绿色：AIS 已匹配；黄色：坐标有效但 AIS 未匹配；红色：业务增强不可用
+    EnrichedDetectionSnapshot esnap = enriched_snapshot_.get();
+    const bool has_draw = !esnap.expired(proc_start, cfg.result_ttl_ms) && !esnap.detections.empty();
     if (cpu_draw) {
       int64_t tdraw = now_ms();
       const uint8_t* src[2] = {f->data[0], f->data[1]};
@@ -559,13 +648,23 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       const int dst_stride960[1] = {source_w_ * 3};
       sws_scale(nv12_to_rgb, src, src_stride, 0, source_h_, dst960, dst_stride960);
       if (has_draw) {
-        for (const auto& d : snap.detections) {
-          Color c{0, 255, 0};
-          draw_rectangle(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1),
-                         static_cast<int>(d.x2), static_cast<int>(d.y2), c, 2);
-          char label[32];
-          std::snprintf(label, sizeof(label), "ship %.2f", d.score);
-          draw_label(rgb, static_cast<int>(d.x1), static_cast<int>(d.y1), label, c, 2);
+        for (const auto& e : esnap.detections) {
+          Color c{0, 255, 0};  // 默认绿色（AIS 匹配）
+          if (e.enrichment_status == EnrichmentState::COORD_ONLY) {
+            c = {255, 255, 0};  // 黄色
+          } else if (e.enrichment_status == EnrichmentState::DETECTION_ONLY) {
+            c = {255, 0, 0};  // 红色
+          }
+          draw_rectangle(rgb, static_cast<int>(e.x1), static_cast<int>(e.y1),
+                         static_cast<int>(e.x2), static_cast<int>(e.y2), c, 2);
+          char label[64];
+          if (e.ais_matched && !e.mmsi.empty()) {
+            std::snprintf(label, sizeof(label), "MMSI:%s S:%.1f %.2f",
+                          e.mmsi.c_str(), e.speed, e.score);
+          } else {
+            std::snprintf(label, sizeof(label), "ship %.2f", e.score);
+          }
+          draw_label(rgb, static_cast<int>(e.x1), static_cast<int>(e.y1), label, c, 2);
         }
       }
       const uint8_t* s2[1] = {rgb.data.data()};
@@ -577,7 +676,21 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     } else if (bmcv_draw) {
       int64_t tdraw = now_ms();
       if (has_draw) {
-        if (!bmcv_.draw_rectangles(f, snap.detections, berr)) {
+        std::vector<BmcvProcessor::ColoredRect> rects;
+        rects.reserve(esnap.detections.size());
+        for (const auto& e : esnap.detections) {
+          BmcvProcessor::ColoredRect r;
+          r.x1 = e.x1; r.y1 = e.y1; r.x2 = e.x2; r.y2 = e.y2;
+          if (e.enrichment_status == EnrichmentState::FULL) {
+            r.r = 0; r.g = 255; r.b = 0;       // 绿色：AIS 匹配
+          } else if (e.enrichment_status == EnrichmentState::COORD_ONLY) {
+            r.r = 255; r.g = 255; r.b = 0;     // 黄色：坐标有效未匹配
+          } else {
+            r.r = 255; r.g = 0; r.b = 0;       // 红色：业务不可用
+          }
+          rects.push_back(r);
+        }
+        if (!bmcv_.draw_colored_rectangles(f, rects, berr)) {
           set_error(10, "BMCV 绘制失败: " + berr);
         }
       }

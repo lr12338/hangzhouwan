@@ -35,6 +35,17 @@ struct BusinessResult {
   double course = 0.0;
   double ais_distance_km = 0.0;
   int ais_age_seconds = 0;
+  // 完整证据字段（AIS 证据 + JSONL）
+  int64_t ais_age_ms = 0;
+  double match_score = 0.0;
+  std::string reject_reason;
+  bool extrapolated = false;
+  double ais_lon = 0.0;        // AIS 原始经度
+  double ais_lat = 0.0;        // AIS 原始纬度
+  double ais_lon_aligned = 0.0; // AIS 时间对齐后经度
+  double ais_lat_aligned = 0.0; // AIS 时间对齐后纬度
+  float score = 0.0f;          // 检测置信度
+  float x1 = 0.0f, y1 = 0.0f, x2 = 0.0f, y2 = 0.0f;  // 检测框
 };
 
 enum class EnrichmentState {

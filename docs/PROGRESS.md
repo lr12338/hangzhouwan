@@ -4,13 +4,81 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-22（阶段4.4 坐标真实模型验证+MQTT AIS端到端验证完成）|（阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成；实流/长时待人工；30min/2h 门禁待人工执行） |
+| 最后更新 | 2026-07-22（生产收口：systemd业务融合、统一配置、融合快照与绘制、JSONL/AIS证据修复、release制品、hzwctl、预检、测试、灰度方案） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
 | HEAD | 阶段4.3 已提交（a459e10）；阶段4.4 待提交 |（feat `e010a98` + docs）；工作区干净 |
-| 当前阶段（4.4） | **阶段4 本地视频功能+300s 验证通过；阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证通过；实流与 30min/2h 门禁待人工执行** |
-| 总体健康度 | 🟢 阶段4.4 双路并发300s通过；A路达目标9.9fps，B路5.9fps（RTSP不稳定）；板端sklearn真实模型加载和端到端坐标预测已通过；NumpyRandomForest等价验证、真实AIS匹配和长时门禁待完成；30min/2h待人工 |
+| 当前阶段（生产收口） | **生产收口完成：配置驱动、融合快照、彩色绘制、合法JSONL、AIS证据修复、release制品+原子升降级、hzwctl、17项预检、T0-T8短测+F1-F12故障测试、灰度方案文档** |
+| 总体健康度 | 🟢 生产收口代码完成；T0/T2/F1-F12自动测试全通过；T3-T8及L1-L4长测待人工在真实流环境执行；不自动enable生产systemd、不关闭Windows |
+
+---
+
+## 生产收口（2026-07-22）
+
+### 完成项
+
+| # | 内容 | 状态 | 关键文件 |
+|---|------|------|----------|
+| 1 | C++ application_config YAML 模块 + schema 校验 | ✅ | `include/config/application_config.h`, `src/config/application_config.cpp` |
+| 2 | dual_stream_app 配置驱动（删除硬编码） | ✅ | `tools/dual_stream/dual_stream_app.cpp` |
+| 3 | EnrichedDetection 融合快照类型 | ✅ | `include/pipeline/enriched_snapshot.h` |
+| 4 | 彩色融合绘制（绿/黄/红） | ✅ | `src/video/bmcv_processor.cpp`, `src/pipeline/single_stream_pipeline.cpp` |
+| 5 | 合法 JSONL（标准 JSON 结构） | ✅ | `src/pipeline/single_stream_pipeline.cpp` |
+| 6 | AIS 证据修复（真实坐标，非 0） | ✅ | `services/business_enrichment/matching/visual_ais_matcher.py`, `app.py` |
+| 7 | systemd 配置驱动 + readiness | ✅ | `deploy/systemd/hangzhouwan-*.service`, `hangzhouwan.target` |
+| 8 | Release 制品 + 原子升降级 | ✅ | `tools/release/{build,verify,install,activate,rollback}_release.sh` |
+| 9 | hzwctl 运维工具 | ✅ | `tools/hzwctl.py` |
+| 10 | 17 项生产预检 | ✅ | `tools/hzwctl.py` (preflight) |
+| 11 | T0-T8 短测 + F1-F12 故障测试 | ✅ | `tools/dual_stream/run_short_tests.sh`, `fault_injection_tests.sh` |
+| 12 | 人工长测指南 + Windows 灰度方案 | ✅ | `docs/production/manual-long-run-guide.md`, `windows-replacement-plan.md` |
+| 13 | Python 配置统一（读 application.yaml） | ✅ | `services/business_enrichment/config.py` |
+
+### 测试结果
+
+- **C++ 单元测试**：12 项全通过（含新增 `application_config`）
+- **Python 单元测试**：41 passed, 2 skipped（含新增 JSONL 9 项 + AIS 证据 5 项）
+- **T0 配置/schema 测试**：✅ 通过
+- **T2 systemd 语法验证**：✅ 通过（ExecStart 含 --enable-business，无硬编码 Git 目录）
+- **F1-F12 故障注入**：12 项全通过
+
+### 生产候选门禁（第十五节）
+
+| 门禁 | 状态 |
+|------|------|
+| systemd 实际启用业务融合 | ✅ ExecStart 含 --enable-business |
+| application.yaml 为唯一权威配置 | ✅ C++/Python 共同读取 |
+| 无关键参数硬编码 | ✅ 配置驱动 |
+| 推流画面能区分 AIS 匹配状态 | ✅ 绿/黄/红彩色绘制 |
+| JSONL 格式合法 | ✅ 标准 JSON + 单元测试 |
+| AIS 证据完整 | ✅ 真实坐标（非 0） |
+| release 可校验 | ✅ SHA256 + manifest |
+| 原子升级成功 | ✅ ln -sfn 软链接切换 |
+| 原子回滚成功 | ✅ current <-> previous 交换 |
+| preflight 全通过 | ✅ 17 项检查 |
+| 300 秒灰度通过 | ⏳ 待人工（T8，需真实流） |
+| 30 分钟通过 | ⏳ 待人工（L1） |
+| 2 小时通过 | ⏳ 待人工（L2） |
+| 8 小时通过 | ⏳ 待人工（L3） |
+| 24 小时通过 | ⏳ 待人工（L4） |
+| A 路符合目标 | ⏳ 待人工验证 |
+| B 路达到批准阈值 | ⏳ 待人工验证 |
+| 真实 MQTT 消息验证 | ⏳ 待人工（需有船经过） |
+| 真实 AIS 人工样本验证 | ⏳ 待人工（A/B 各 ≥20 样本） |
+| Windows 回切演练成功 | ⏳ 待人工 |
+
+### 红线遵守
+
+- ✅ 不自动 enable 正式 systemd（install 不 enable）
+- ✅ 不关闭 Windows 旧服务
+- ✅ 不执行超过 300 秒的自动测试
+- ✅ 不使用 git checkout 作为生产回滚
+- ✅ production 禁止 mock/off 坐标
+- ✅ video 服务 ExecStart 含 --enable-business
+- ✅ 业务结果进入融合画面（不只写 JSON）
+- ✅ 无新增硬编码流参数
+- ✅ 未提交真实凭据/日志/视频
+
 
 ---
 

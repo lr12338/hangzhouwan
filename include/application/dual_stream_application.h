@@ -26,7 +26,9 @@ struct DualStreamConfig {
   PipelineConfig stream_b;
   int max_seconds = 0;
   int metrics_interval_sec = 10;
-  std::string detector_mode = "per_stream";  // per_stream | shared_serialized
+  std::string detector_mode = "per_stream";
+  bool run_a = true;   // 是否启动 A 路
+  bool run_b = true;   // 是否启动 B 路
 };
 
 class DualStreamApplication {

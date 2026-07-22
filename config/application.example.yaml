@@ -11,6 +11,8 @@ application:
 inference:
   backend: bmrt                   # 工控机正式后端：bmrt（BM1684 BMRuntime）
   model_path: ""                  # best.onnx / best.bmodel 绝对路径，由部署注入
+  bmodel_sha256: ""                # bmodel SHA256（非空时校验）
+  device: 0                        # TPU 设备号
   input_width: 640
   input_height: 640
   confidence_threshold: 0.1
@@ -67,6 +69,10 @@ runtime:
   processed_queue_size: 1
   reconnect_initial_seconds: 2
   reconnect_max_seconds: 30
+  decoder: h264_bm
+  encoder: h264_bm
+  preprocess: bmcv                 # cpu | bmcv
+  draw_mode: bmcv                  # cpu | bmcv | none
   health_check_interval_seconds: 10
 
 # === 阶段4.5 生产候选配置扩展 ===

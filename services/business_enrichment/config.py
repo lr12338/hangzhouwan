@@ -6,6 +6,11 @@
 import os
 import sys
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 DEFAULTS = {
     "environment": "development",
     "log_level": "INFO",
@@ -50,9 +55,17 @@ class ConfigError(Exception):
 class BusinessConfig:
     """配置对象，从环境变量加载，支持 schema 校验。"""
 
-    def __init__(self, **overrides):
+    def __init__(self, config_path=None, **overrides):
         self._data = dict(DEFAULTS)
         self._data.update(overrides)
+        if config_path:
+            self._load_from_yaml(config_path)
+        else:
+            # 尝试默认路径
+            default_path = os.environ.get(
+                "HZW_CONFIG", "/etc/hangzhouwan/application.yaml")
+            if os.path.isfile(default_path) and yaml:
+                self._load_from_yaml(default_path)
         self._load_from_env()
         self._validate()
 
@@ -102,6 +115,67 @@ class BusinessConfig:
             ]
         else:
             self._data["mqtt_topics"] = []
+
+
+    def _load_from_yaml(self, config_path):
+        """从 application.yaml 加载配置（C++ 和 Python 共同读取）。"""
+        if not yaml:
+            return
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+        except Exception:
+            return
+        if not isinstance(doc, dict):
+            return
+
+        app = doc.get("application", {})
+        if app.get("environment"):
+            self._data["environment"] = app["environment"]
+        if app.get("log_level"):
+            self._data["log_level"] = app["log_level"]
+
+        biz = doc.get("business", {})
+        if biz.get("coordinate_mode"):
+            self._data["coordinate_mode"] = biz["coordinate_mode"]
+        if biz.get("model_a_path"):
+            self._data["model_a_path"] = biz["model_a_path"]
+        if biz.get("model_b_path"):
+            self._data["model_b_path"] = biz["model_b_path"]
+        if biz.get("reference_width"):
+            self._data["reference_width"] = biz["reference_width"]
+        if biz.get("reference_height"):
+            self._data["reference_height"] = biz["reference_height"]
+        if biz.get("socket_path"):
+            self._data["socket_path"] = biz["socket_path"]
+        if biz.get("request_timeout_ms"):
+            self._data["request_timeout_ms"] = biz["request_timeout_ms"]
+        if biz.get("max_connections"):
+            self._data["max_connections"] = biz["max_connections"]
+        if biz.get("enable_evidence_recording") is not None:
+            self._data["enable_evidence_recording"] = biz["enable_evidence_recording"]
+        if biz.get("ais_max_extrapolation_sec"):
+            self._data["ais_max_extrapolation_sec"] = biz["ais_max_extrapolation_sec"]
+        dist = biz.get("ais_max_distance_m", {})
+        if isinstance(dist, dict):
+            if dist.get("A"):
+                self._data["stream_a_ais_max_distance_m"] = dist["A"]
+            if dist.get("B"):
+                self._data["stream_b_ais_max_distance_m"] = dist["B"]
+
+        mqtt = doc.get("mqtt", {})
+        if mqtt.get("port"):
+            self._data["mqtt_port"] = mqtt["port"]
+        if mqtt.get("keepalive"):
+            self._data["mqtt_keepalive"] = mqtt["keepalive"]
+        if mqtt.get("reconnect_sec"):
+            self._data["mqtt_reconnect_sec"] = mqtt["reconnect_sec"]
+        if mqtt.get("topics"):
+            self._data["mqtt_topics"] = ",".join(mqtt["topics"])
+
+        log = doc.get("logging", {})
+        if log.get("disk_threshold_mb"):
+            self._data["disk_threshold_mb"] = log["disk_threshold_mb"]
 
     def _validate(self):
         env = self._data["environment"]

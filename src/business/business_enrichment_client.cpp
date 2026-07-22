@@ -60,6 +60,15 @@ int extract_int(const std::string& json, const std::string& key) {
   return static_cast<int>(extract_double(json, key));
 }
 
+int64_t extract_int64(const std::string& json, const std::string& key) {
+  std::string pat = "\"" + key + "\":";
+  auto pos = json.find(pat);
+  if (pos == std::string::npos) return 0;
+  pos += pat.size();
+  try { return static_cast<int64_t>(std::stoll(json.substr(pos))); }
+  catch (...) { return 0; }
+}
+
 // 简单分割 results 数组中的每个对象
 std::vector<std::string> split_results(const std::string& json) {
   std::vector<std::string> results;
@@ -212,6 +221,15 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
     r.course = extract_double(part, "course");
     r.ais_distance_km = extract_double(part, "ais_distance_km");
     r.ais_age_seconds = extract_int(part, "ais_age_seconds");
+    r.ais_age_ms = extract_int64(part, "ais_age_ms");
+    r.match_score = extract_double(part, "match_score");
+    r.reject_reason = extract_string(part, "reject_reason");
+    r.extrapolated = extract_bool(part, "extrapolated");
+    r.ais_lon = extract_double(part, "ais_lon");
+    r.ais_lat = extract_double(part, "ais_lat");
+    r.ais_lon_aligned = extract_double(part, "ais_lon_aligned");
+    r.ais_lat_aligned = extract_double(part, "ais_lat_aligned");
+    r.score = static_cast<float>(extract_double(part, "score"));
     if (r.coordinate_valid) any_coord = true;
     if (r.ais_matched) any_match = true;
     results.push_back(r);

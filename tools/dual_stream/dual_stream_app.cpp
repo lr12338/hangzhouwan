@@ -1,11 +1,21 @@
 // -*- coding: utf-8 -*-
 // =============================================================================
-// 双路并发视频推理 CLI（阶段4.4）。
+// 双路并发视频推理 CLI（生产收口版）。
 //
-// A/B 同时启动，各自独立 RTSP/RTMP/推理/编码。全局 SIGINT/SIGTERM 同时停止。
-// 真实 RTSP/RTMP 地址从环境变量读取，不入命令行/日志。
+// 配置驱动：所有参数从 /etc/hangzhouwan/application.yaml 读取。
+// 真实 RTSP/RTMP 地址从环境变量（由配置指定变量名）注入，不入命令行/日志。
+// 业务增强通过 --enable-business 启用，socket 路径由 --business-socket 或配置指定。
 //
-// 用法见 tools/dual_stream/README.md。
+// 用法：
+//   dual_stream_app --config /etc/hangzhouwan/application.yaml \
+//                   --enable-business \
+//                   --business-socket /run/hangzhouwan/business.sock
+//
+// 测试选项（不影响生产配置）：
+//   --max-seconds 300       最长运行秒数（0=不限）
+//   --metrics-interval 10   指标输出间隔秒
+//   --streams A,B           指定启动的流（默认全部 enabled 流）
+//   --no-region-filter      临时禁用禁区过滤
 // =============================================================================
 #include <csignal>
 #include <cstdio>
@@ -15,7 +25,7 @@
 #include <vector>
 
 #include "application/dual_stream_application.h"
-#include "video/detection_region_filter.h"
+#include "config/application_config.h"
 
 namespace {
 
@@ -29,107 +39,83 @@ void on_signal(int sig) {
   }
 }
 
-std::string env_or_empty(const char* name) {
-  const char* v = std::getenv(name);
-  return v ? std::string(v) : std::string();
-}
-
-bool env_required(const char* name, std::string& out) {
-  out = env_or_empty(name);
-  if (out.empty()) {
-    std::fprintf(stderr, "错误 | 配置 | 环境变量 %s 未设置\n", name);
-    return false;
-  }
-  return true;
-}
-
-// A 路禁区（参考分辨率 2560x1440）
-void setup_a_forbidden_zones(hzw::PipelineConfig& cfg) {
-  cfg.enable_region_filter = true;
-  cfg.region_ref_width = 2560;
-  cfg.region_ref_height = 1440;
-  cfg.forbidden_rectangles = {
-    {1480, 0, 2560, 630},
-    {247, 855, 275, 888},
-    {2295, 895, 2315, 927},
-  };
-  cfg.forbidden_polygons = {
-    {{0, 0}, {0, 640}, {710, 620}, {1260, 620}, {1260, 0}},
-  };
-}
-
-// B 路禁区（参考分辨率 2560x1440）
-void setup_b_forbidden_zones(hzw::PipelineConfig& cfg) {
-  cfg.enable_region_filter = true;
-  cfg.region_ref_width = 2560;
-  cfg.region_ref_height = 1440;
-  cfg.forbidden_rectangles = {
-    {0, 0, 2560, 210},
-  };
-  cfg.forbidden_polygons = {
-    {{2160, 210}, {2560, 280}, {2560, 210}},
-  };
-}
-
-void setup_common(hzw::PipelineConfig& cfg) {
-  cfg.bmodel_path = "artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel";
-  cfg.device = 0;
-  cfg.decoder = "h264_bm";
-  cfg.encoder = "h264_bm";
-  cfg.source_fps = 25;
-  cfg.output_fps = 10;
-  cfg.inference_fps = 5;
-  cfg.bitrate_kbps = 800;
-  cfg.gop = 20;
-  cfg.queue_size = 1;
-  cfg.conf = 0.1f;
-  cfg.iou = 0.1f;
-  cfg.result_ttl_ms = 1000;
-  cfg.preprocess = "bmcv";
-  cfg.draw_mode = "bmcv";
-  cfg.source_type = "rtsp";
-  cfg.rtsp_transport = "tcp";
-  cfg.rtsp_stimeout_us = 5000000;
-  cfg.rtsp_max_reconnect = -1;
-  cfg.rtsp_initial_backoff_ms = 1000;
-  cfg.rtsp_max_backoff_ms = 30000;
-  cfg.sink_type = "rtmp";
-  cfg.jitter_buffer_size = 5;
-  cfg.metrics_interval_sec = 10;
-}
-
 void usage() {
   std::fprintf(stdout,
       "用法: dual_stream_app [选项]\n"
+      "  --config PATH           配置文件路径（必需，默认 /etc/hangzhouwan/application.yaml）\n"
+      "  --enable-business       启用业务增强（坐标+AIS）\n"
+      "  --business-socket PATH  Sidecar Unix Socket 路径\n"
       "  --max-seconds 300       最长运行秒数（0=不限）\n"
       "  --metrics-interval 10   指标输出间隔秒\n"
-      "  --detector-mode per_stream  per_stream | shared_serialized\n"
-      "  --jitter-buffer-size 5  抖动缓冲帧数\n"
-      "  --output-fps 10         输出帧率\n"
-      "  --inference-fps 5       推理帧率\n"
-      "  --no-region-filter      禁用禁区过滤\n"
-      "  --streams A,B           指定启动的流（默认 A,B）\n"
-  "  --enable-business        启用业务增强（坐标+AIS）\n"
-  "  --business-socket PATH  Sidecar Unix Socket 路径\n"
+      "  --streams A,B           指定启动的流（默认全部 enabled 流）\n"
+      "  --no-region-filter      临时禁用禁区过滤\n"
       "\n"
-      "环境变量:\n"
-      "  STREAM_A_INPUT_URL / STREAM_A_OUTPUT_URL\n"
-      "  STREAM_B_INPUT_URL / STREAM_B_OUTPUT_URL\n");
+      "环境变量（由配置文件指定变量名）：\n"
+      "  RTSP 输入 / RTMP 输出 URL 通过环境变量注入\n");
+}
+
+// 从 ApplicationConfig + StreamConfig 构建 PipelineConfig。
+hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
+                                          const hzw::StreamConfig& sc,
+                                          bool no_region_filter,
+                                          const std::string& business_socket,
+                                          bool enable_business,
+                                          const std::string& jsonl_path) {
+  hzw::PipelineConfig pc;
+  pc.stream_id = sc.id;
+  pc.input_path = app_cfg.resolve_env(sc.input_url_env);
+  pc.output_path = app_cfg.resolve_env(sc.output_url_env);
+  pc.bmodel_path = app_cfg.bmodel_path;
+  pc.device = app_cfg.device;
+  pc.decoder = app_cfg.decoder;
+  pc.encoder = app_cfg.encoder;
+  pc.source_fps = 25;  // RTSP 模式不依赖源帧率整除
+  pc.output_fps = sc.output_fps;
+  pc.inference_fps = sc.inference_fps;
+  pc.bitrate_kbps = sc.bitrate_kbps;
+  pc.gop = sc.gop;
+  pc.queue_size = app_cfg.frame_queue_size;
+  pc.conf = sc.conf;
+  pc.iou = sc.iou;
+  pc.result_ttl_ms = sc.result_ttl_ms;
+  pc.preprocess = app_cfg.preprocess;
+  pc.draw_mode = app_cfg.draw_mode;
+  pc.source_type = "rtsp";
+  pc.rtsp_transport = "tcp";
+  pc.rtsp_stimeout_us = 5000000;
+  pc.rtsp_max_reconnect = -1;
+  pc.rtsp_initial_backoff_ms = app_cfg.reconnect_initial_seconds * 1000;
+  pc.rtsp_max_backoff_ms = app_cfg.reconnect_max_seconds * 1000;
+  pc.sink_type = "rtmp";
+  pc.jitter_buffer_size = sc.jitter_buffer_size;
+  pc.metrics_interval_sec = app_cfg.health_check_interval_seconds;
+  pc.coordinate_model_path = sc.coordinate_model_path;
+  pc.coordinate_mode = app_cfg.coordinate_mode;
+  pc.camera_param = sc.camera_param;
+  pc.enable_business = enable_business;
+  pc.business_socket = business_socket;
+  pc.business_jsonl_path = enable_business ? jsonl_path : "";
+
+  if (!no_region_filter && (!sc.forbidden_rectangles.empty() || !sc.forbidden_polygons.empty())) {
+    pc.enable_region_filter = true;
+    pc.region_ref_width = app_cfg.reference_width;
+    pc.region_ref_height = app_cfg.reference_height;
+    pc.forbidden_rectangles = sc.forbidden_rectangles;
+    pc.forbidden_polygons = sc.forbidden_polygons;
+  }
+  return pc;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  std::string config_path = "/etc/hangzhouwan/application.yaml";
   int max_seconds = 0;
   int metrics_interval = 10;
-  std::string detector_mode = "per_stream";
-  int jitter_buffer_size = 5;
-  int output_fps = 10;
-  int inference_fps = 5;
+  std::string streams_filter;
   bool no_region_filter = false;
-  std::string streams = "A,B";
   bool enable_business = false;
-  std::string business_socket = "/tmp/hangzhouwan-business.sock";
+  std::string business_socket;
 
   for (int i = 1; i < argc; ++i) {
     std::string k = argv[i];
@@ -138,64 +124,69 @@ int main(int argc, char** argv) {
       return argv[++i];
     };
     if (k == "--help" || k == "-h") { usage(); return 0; }
+    else if (k == "--config") { auto v = next(k.c_str()); if (v) config_path = v; else return 1; }
     else if (k == "--max-seconds") { auto v = next(k.c_str()); if (v) max_seconds = std::atoi(v); else return 1; }
     else if (k == "--metrics-interval") { auto v = next(k.c_str()); if (v) metrics_interval = std::atoi(v); else return 1; }
-    else if (k == "--detector-mode") { auto v = next(k.c_str()); if (v) detector_mode = v; else return 1; }
-    else if (k == "--jitter-buffer-size") { auto v = next(k.c_str()); if (v) jitter_buffer_size = std::atoi(v); else return 1; }
-    else if (k == "--output-fps") { auto v = next(k.c_str()); if (v) output_fps = std::atoi(v); else return 1; }
-    else if (k == "--inference-fps") { auto v = next(k.c_str()); if (v) inference_fps = std::atoi(v); else return 1; }
+    else if (k == "--streams") { auto v = next(k.c_str()); if (v) streams_filter = v; else return 1; }
     else if (k == "--no-region-filter") { no_region_filter = true; }
-    else if (k == "--streams") { auto v = next(k.c_str()); if (v) streams = v; else return 1; }
     else if (k == "--enable-business") { enable_business = true; }
     else if (k == "--business-socket") { auto v = next(k.c_str()); if (v) business_socket = v; else return 1; }
     else { std::fprintf(stderr, "未知参数: %s\n", k.c_str()); usage(); return 1; }
   }
 
-  bool want_a = (streams.find('A') != std::string::npos);
-  bool want_b = (streams.find('B') != std::string::npos);
-
-  std::string a_input, a_output, b_input, b_output;
-  if (want_a) {
-    if (!env_required("STREAM_A_INPUT_URL", a_input)) return 2;
-    if (!env_required("STREAM_A_OUTPUT_URL", a_output)) return 2;
+  // 加载配置
+  hzw::ApplicationConfig app_cfg;
+  std::string cfg_err;
+  if (!app_cfg.load(config_path, cfg_err)) {
+    std::fprintf(stderr, "致命 | 配置 | 加载失败: %s\n", cfg_err.c_str());
+    return 3;
   }
-  if (want_b) {
-    if (!env_required("STREAM_B_INPUT_URL", b_input)) return 2;
-    if (!env_required("STREAM_B_OUTPUT_URL", b_output)) return 2;
+  std::fprintf(stdout, "信息 | 配置 | 已加载 %s environment=%s bmodel=%s coordinate_mode=%s\n",
+               config_path.c_str(), app_cfg.environment.c_str(),
+               app_cfg.bmodel_path.c_str(), app_cfg.coordinate_mode.c_str());
+  std::fflush(stdout);
+
+  // business socket 默认从配置取
+  if (business_socket.empty()) {
+    business_socket = app_cfg.business_socket;
+  }
+
+  // 构建 PipelineConfig
+  std::vector<hzw::PipelineConfig> pipeline_cfgs;
+  for (const auto& sc : app_cfg.streams) {
+    if (!sc.enabled) continue;
+    if (!streams_filter.empty() && streams_filter.find(sc.id) == std::string::npos) continue;
+    std::string input_url = app_cfg.resolve_env(sc.input_url_env);
+    std::string output_url = app_cfg.resolve_env(sc.output_url_env);
+    if (input_url.empty()) {
+      std::fprintf(stderr, "错误 | 配置 | 流 %s 环境变量 %s 未设置\n",
+                   sc.id.c_str(), sc.input_url_env.c_str());
+      return 2;
+    }
+    if (output_url.empty()) {
+      std::fprintf(stderr, "错误 | 配置 | 流 %s 环境变量 %s 未设置\n",
+                   sc.id.c_str(), sc.output_url_env.c_str());
+      return 2;
+    }
+    std::string jsonl_path = "/var/lib/hangzhouwan/stream_" + sc.id + "_events.jsonl";
+    pipeline_cfgs.push_back(build_pipeline_config(app_cfg, sc, no_region_filter,
+                                                  business_socket, enable_business, jsonl_path));
+  }
+
+  if (pipeline_cfgs.empty()) {
+    std::fprintf(stderr, "致命 | 配置 | 没有启用的流\n");
+    return 4;
   }
 
   hzw::DualStreamConfig dcfg;
   dcfg.max_seconds = max_seconds;
   dcfg.metrics_interval_sec = metrics_interval;
-  dcfg.detector_mode = detector_mode;
+  dcfg.detector_mode = "per_stream";
 
-  // 默认配置（A 路）
-  setup_common(dcfg.stream_a);
-  dcfg.stream_a.stream_id = "A";
-  dcfg.stream_a.input_path = a_input;
-  dcfg.stream_a.output_path = a_output;
-  dcfg.stream_a.output_fps = output_fps;
-  dcfg.stream_a.inference_fps = inference_fps;
-  dcfg.stream_a.jitter_buffer_size = jitter_buffer_size;
-  dcfg.stream_a.camera_param = 0.5;
-  dcfg.stream_a.enable_business = enable_business;
-  dcfg.stream_a.business_socket = business_socket;
-  dcfg.stream_a.business_jsonl_path = enable_business ? "artifacts/internal-development/stream_A_events.jsonl" : "";
-  if (!no_region_filter) setup_a_forbidden_zones(dcfg.stream_a);
-
-  // 默认配置（B 路）
-  setup_common(dcfg.stream_b);
-  dcfg.stream_b.stream_id = "B";
-  dcfg.stream_b.input_path = b_input;
-  dcfg.stream_b.output_path = b_output;
-  dcfg.stream_b.output_fps = output_fps;
-  dcfg.stream_b.inference_fps = inference_fps;
-  dcfg.stream_b.jitter_buffer_size = jitter_buffer_size;
-  dcfg.stream_b.camera_param = 0.8;
-  dcfg.stream_b.enable_business = enable_business;
-  dcfg.stream_b.business_socket = business_socket;
-  dcfg.stream_b.business_jsonl_path = enable_business ? "artifacts/internal-development/stream_B_events.jsonl" : "";
-  if (!no_region_filter) setup_b_forbidden_zones(dcfg.stream_b);
+  dcfg.run_a = false;
+  dcfg.run_b = false;
+  if (pipeline_cfgs.size() >= 1) { dcfg.stream_a = pipeline_cfgs[0]; dcfg.run_a = true; }
+  if (pipeline_cfgs.size() >= 2) { dcfg.stream_b = pipeline_cfgs[1]; dcfg.run_b = true; }
 
   hzw::DualStreamApplication app;
   g_app = &app;
