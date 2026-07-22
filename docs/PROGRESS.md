@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-22（阶段4.4 双路并发+业务Sidecar+MQTT AIS+300s全链路验证完成）|（阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成；实流/长时待人工；30min/2h 门禁待人工执行） |
+| 最后更新 | 2026-07-22（阶段4.4 坐标真实模型验证+MQTT AIS端到端验证完成）|（阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成；实流/长时待人工；30min/2h 门禁待人工执行） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |

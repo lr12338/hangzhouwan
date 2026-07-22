@@ -182,3 +182,31 @@ export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径
 - `docs/25-dual-stream-full-stack.md`
 - `docs/26-dual-stream-manual-long-run.md`
 - `docs/27-coordinate-ais-mqtt-architecture.md`
+
+### 2026-07-22 坐标真实模型 + MQTT AIS 验证
+
+#### 坐标真实模型验证
+
+- 安装 sklearn 1.3.2 + scipy 1.10.1（`pip3 install scikit-learn==1.3.2`）
+- A/B 模型通过 `joblib.load` 原生加载成功（100棵树各）
+- A 路：4特征 [x1,y1,x2,y2] -> (lon,lat)，预测 0.56ms/次
+- B 路：2特征 [x_center,y_center] -> (lon,lat)，预测 0.62ms/次
+- 坐标在杭州湾区域（lon~121.05, lat~30.57）
+- 端到端验证：双路60s测试A路280个JSONL事件，真实坐标与模拟坐标不同（确认真实模型生效）
+- Sidecar 同时支持 sklearn 原生模式和 numpy 向量化备选模式
+
+#### MQTT AIS 端到端验证
+
+- MQTT 连接 iot.hifleet.com:1883 成功，订阅 upAIS/base_2250, upAIS/base_2251
+- AIS 6-bit 解码器验证通过（类型 1/2/3/4/18 均正确解码）
+- MQTT 端到端验证：发布测试AIS消息 -> sidecar接收 -> 解析 -> 缓存 -> 匹配成功
+  - 检测框坐标 (121.0548, 30.5688) 匹配 AIS 船 (121.054, 30.569)，距离 0.084km
+  - MMSI=412000001, speed=5.0, course=180.0
+- 一对一匹配验证通过（两个检测框匹配两个不同MMSI）
+- 实际运行期间 AIS 缓存为 0（区域内当前无船经过）
+
+#### 双路60s真实模型测试
+
+- A 路：571帧输出（9.52fps），284次推理（4.73fps），280个JSONL事件
+- B 路：因摄像头返回 400 Bad Request 未连接成功（非代码问题）
+- 业务增强处理耗时 ~15ms/帧（含坐标预测+AIS匹配），不阻塞视频路径

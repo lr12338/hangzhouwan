@@ -30,10 +30,12 @@ C++ 视频热路径                         Python 业务 Sidecar
 - 输出：`(longitude, latitude)`
 
 ### 状态
-- sklearn/joblib 不可用（板端 aarch64 无 scipy wheel）
-- 降级为接口模拟（基于检测框位置线性映射到杭州湾区域经纬度）
-- 接口模拟通过验证：坐标合理（lon~121.03, lat~30.55）
-- 真实模型待 x86 导出为 JSON 后增加 C++ 推理器
+- sklearn 1.3.2 + scipy 1.10.1 已安装（pip3 install scikit-learn==1.3.2）
+- A/B 模型通过 joblib.load 原生加载成功
+- 预测耗时：A=0.56ms/次 B=0.62ms/次
+- 坐标在杭州湾区域（lon~121.05 lat~30.57）
+- 端到端验证通过：真实坐标与模拟坐标不同（dlon=0.027 dlat=0.016）
+- 备选：numpy 向量化实现（无需 sklearn 运行时，0.56ms/次）
 
 ## MQTT AIS
 
@@ -52,6 +54,7 @@ C++ 视频热路径                         Python 业务 Sidecar
 - 最大容量 500 艘船
 - 30 秒过期清理
 - 统计：消息数、解析成功数、失败数、缓存船数
+- **已验证**：MQTT发布测试消息 -> 解析成功 -> 缓存更新 -> 匹配成功
 
 ## 视觉-AIS 匹配
 

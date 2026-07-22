@@ -4,7 +4,7 @@
 杭州湾双路船舶检测 · 业务 Sidecar（阶段4.4）
 
 职责：
-  1. 启动时加载 A/B 坐标模型（sklearn 不可用时降级为接口模拟）；
+  1. 启动时加载 A/B 坐标模型（sklearn 1.3.2，原生 joblib.load）；
   2. 连接 MQTT 订阅 AIS 数据（paho-mqtt），缓存并定时清理过期记录；
   3. 通过 Unix Domain Socket 接收 C++ 批量请求：
      - 坐标预测（A 用完整框，B 用中心点）
@@ -18,16 +18,18 @@ import math
 import os
 import re
 import socket
-import struct
 import sys
 import threading
 import time
 
-EARTH_RADIUS_KM = 6371.0
+import numpy as np
+
 SOCKET_PATH = os.environ.get(
     "HANGZHOUWAN_BUSINESS_SOCK",
-    f"/tmp/hangzhouwan-business.sock"
+    "/tmp/hangzhouwan-business.sock"
 )
+
+EARTH_RADIUS_KM = 6371.0
 
 # ===== AIS 6-bit 解码 =====
 def _decode_6bit(text):
@@ -110,7 +112,7 @@ class AisStore:
     """线程安全、容量受控的 AIS 缓存。"""
     def __init__(self, max_capacity=500, timeout_sec=30):
         self._lock = threading.Lock()
-        self._data = {}  # mmsi -> record dict
+        self._data = {}
         self._max = max_capacity
         self._timeout = timeout_sec
         self.msg_count = 0
@@ -150,53 +152,140 @@ class AisStore:
             return len(self._data)
 
 
+class NumpyRandomForest:
+    """纯 numpy 随机森林预测器：向量化遍历所有树，无需 sklearn 运行时。"""
+    def __init__(self, model):
+        self.n_features = model.n_features_in_
+        self.n_outputs = model.n_outputs_
+        n_trees = len(model.estimators_)
+        self.n_trees = n_trees
+        all_feat, all_thr, all_left, all_right, all_vals = [], [], [], [], []
+        self.tree_offsets = [0]
+        for est in model.estimators_:
+            t = est.tree_
+            n = t.node_count
+            all_feat.append(t.nodes['feature'].astype(np.int32))
+            all_thr.append(t.nodes['threshold'].astype(np.float64))
+            all_left.append(t.nodes['left_child'].astype(np.int32))
+            all_right.append(t.nodes['right_child'].astype(np.int32))
+            all_vals.append(t.values.reshape(n, -1))
+            self.tree_offsets.append(self.tree_offsets[-1] + n)
+        self.feat = np.concatenate(all_feat)
+        self.thr = np.concatenate(all_thr)
+        self.left = np.concatenate(all_left)
+        self.right = np.concatenate(all_right)
+        self.vals = np.vstack(all_vals)
+        self.root_nodes = np.array(self.tree_offsets[:-1], dtype=np.int32)
+        # 修正子节点偏移为全局索引
+        for i in range(len(self.tree_offsets) - 1):
+            s = slice(self.tree_offsets[i], self.tree_offsets[i + 1])
+            off = self.tree_offsets[i]
+            l = self.left[s]
+            self.left[s] = np.where(l >= 0, l + off, -1)
+            r = self.right[s]
+            self.right[s] = np.where(r >= 0, r + off, -1)
+
+    def predict(self, X):
+        X = np.atleast_2d(np.asarray(X, dtype=np.float64))
+        results = np.zeros((X.shape[0], self.n_outputs))
+        for i in range(X.shape[0]):
+            x = X[i]
+            nodes = self.root_nodes.copy()
+            while True:
+                active = self.left[nodes] != -1
+                if not active.any():
+                    break
+                f_idx = self.feat[nodes]
+                t_val = self.thr[nodes]
+                x_vals = x[f_idx]
+                go_left = x_vals <= t_val
+                nodes = np.where(active, np.where(go_left, self.left[nodes], self.right[nodes]), nodes)
+            results[i] = self.vals[nodes].mean(axis=0)
+        return results
+
+
 class CoordinatePredictor:
-    """坐标预测器。sklearn 不可用时降级为线性近似。"""
+    """坐标预测器。优先用 sklearn 原生加载，失败时用 numpy 向量化实现。"""
     def __init__(self, model_a_path, model_b_path):
-        self.model_a = None
-        self.model_b = None
+        self.rf_a = None
+        self.rf_b = None
         self.simulation = True
+        self.mode = "simulation"
         try:
             import joblib
-            self.model_a = joblib.load(model_a_path)
-            self.model_b = joblib.load(model_b_path)
+            raw_a = joblib.load(model_a_path)
+            raw_b = joblib.load(model_b_path)
+            # 尝试 sklearn 原生 predict
+            _ = raw_a.predict(np.array([[0, 0, 1, 1]]))
+            _ = raw_b.predict(np.array([[0.0, 0.0]]))
+            self.rf_a = raw_a
+            self.rf_b = raw_b
             self.simulation = False
-            print(f"信息 | 坐标 | 真实模型加载成功 A={model_a_path} B={model_b_path}",
-                  flush=True)
+            self.mode = "sklearn"
+            print(f"信息 | 坐标 | sklearn 原生模型加载成功 "
+                  f"A={model_a_path} B={model_b_path}", flush=True)
         except Exception as e:
-            print(f"警告 | 坐标 | sklearn/joblib 不可用({e})，降级为接口模拟",
-                  flush=True)
+            print(f"警告 | 坐标 | sklearn 原生加载失败({e})，尝试 numpy 向量化", flush=True)
+            try:
+                import joblib
+                import types
+                # sklearn stub 加载（兼容旧版本 pickle）
+                class Stub:
+                    def __setstate__(self, s):
+                        if isinstance(s, dict): self.__dict__.update(s)
+                        elif isinstance(s, tuple):
+                            for i in s:
+                                if isinstance(i, dict): self.__dict__.update(i)
+                    def __new__(cls, *a, **k): return object.__new__(cls)
+                for n in ['sklearn', 'sklearn.ensemble', 'sklearn.ensemble._forest',
+                          'sklearn.tree', 'sklearn.tree._classes', 'sklearn.tree._tree',
+                          'sklearn.utils', 'sklearn.utils._joblib', 'sklearn.base',
+                          'sklearn.exceptions', 'sklearn._config',
+                          'scipy', 'scipy.sparse']:
+                    if n not in sys.modules:
+                        m = types.ModuleType(n)
+                        m.__path__ = []
+                        sys.modules[n] = m
+                sys.modules['sklearn.ensemble._forest'].RandomForestRegressor = type('RFR', (Stub,), {})
+                sys.modules['sklearn.tree._classes'].DecisionTreeRegressor = type('DTR', (Stub,), {})
+                sys.modules['sklearn.tree._tree'].Tree = type('Tree', (Stub,), {})
+                sys.modules['scipy.sparse'].csr_matrix = type('csr', (Stub,), {})
+                raw_a = joblib.load(model_a_path)
+                raw_b = joblib.load(model_b_path)
+                self.rf_a = NumpyRandomForest(raw_a)
+                self.rf_b = NumpyRandomForest(raw_b)
+                self.simulation = False
+                self.mode = "numpy"
+                print(f"信息 | 坐标 | numpy 向量化模型加载成功 "
+                      f"A={model_a_path}({self.rf_a.n_trees}树) "
+                      f"B={model_b_path}({self.rf_b.n_trees}树)", flush=True)
+            except Exception as e2:
+                print(f"警告 | 坐标 | numpy 加载也失败({e2})，降级为接口模拟", flush=True)
 
     def predict(self, stream_id, x1, y1, x2, y2, img_w, img_h):
         """返回 (lon, lat, valid)。"""
         try:
-            if not self.simulation and self.model_a and self.model_b:
-                import numpy as np
+            if not self.simulation and self.rf_a and self.rf_b:
                 if stream_id == "A":
                     feat = np.array([[x1, y1, x2, y2]])
-                    pred = self.model_a.predict(feat)
+                    pred = self.rf_a.predict(feat)
                 else:
                     cx = (x1 + x2) / 2.0
                     cy = (y1 + y2) / 2.0
                     feat = np.array([[cx, cy]])
-                    pred = self.model_b.predict(feat)
+                    pred = self.rf_b.predict(feat)
                 lon, lat = float(pred[0][0]), float(pred[0][1])
                 if math.isnan(lon) or math.isnan(lat) or math.isinf(lon) or math.isinf(lat):
                     return 0.0, 0.0, False
+                if not (-180 <= lon <= 180) or not (-90 <= lat <= 90):
+                    return 0.0, 0.0, False
                 return lon, lat, True
             else:
-                # 接口模拟：基于检测框位置线性映射到大致经纬度范围
-                # A 路覆盖杭州湾北岸区域，B 路覆盖南岸区域
                 cx = (x1 + x2) / 2.0 / max(img_w, 1)
                 cy = (y1 + y2) / 2.0 / max(img_h, 1)
-                if stream_id == "A":
-                    base_lon, base_lat = 121.035, 30.560
-                    lon = base_lon + (cx - 0.5) * 0.02
-                    lat = base_lat - cy * 0.01
-                else:
-                    base_lon, base_lat = 121.035, 30.560
-                    lon = base_lon + (cx - 0.5) * 0.02
-                    lat = base_lat - cy * 0.01 - 0.005
+                base_lon, base_lat = 121.035, 30.560
+                lon = base_lon + (cx - 0.5) * 0.02
+                lat = base_lat - cy * 0.01
                 return lon, lat, True
         except Exception:
             return 0.0, 0.0, False
@@ -214,10 +303,12 @@ class MqttAisSubscriber:
         self.topics = topics
         self._stop = False
         self.connected = False
+        self.client = None
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
             self.connected = True
+            self.client = client
             print(f"信息 | MQTT | 连接成功 {self.host}:{self.port}", flush=True)
             for t in self.topics:
                 client.subscribe(t)
@@ -229,6 +320,7 @@ class MqttAisSubscriber:
         try:
             self.store.msg_count += 1
             raw = msg.payload.decode('utf-8', errors='replace').strip()
+            print(f"信息 | MQTT | 收到消息 topic={msg.topic} len={len(raw)}", flush=True)
             ts_match = re.search(r'\*(\d{10})$', raw)
             timestamp = int(ts_match.group(1)) if ts_match else None
             if ts_match:
@@ -239,10 +331,16 @@ class MqttAisSubscriber:
                                   parsed.get("speed", 0), parsed.get("course", 0),
                                   timestamp)
                 self.store.parse_ok += 1
+                print(f"信息 | AIS | 解析成功 mmsi={parsed['mmsi']} "
+                      f"lon={parsed['lon']:.6f} lat={parsed['lat']:.6f} "
+                      f"type={parsed['msg_type']} 缓存={self.store.count()}",
+                      flush=True)
             else:
                 self.store.parse_fail += 1
-        except Exception:
+                print(f"信息 | AIS | 解析失败 raw={raw[:40]}...", flush=True)
+        except Exception as e:
             self.store.parse_fail += 1
+            print(f"警告 | AIS | 消息处理异常: {e}", flush=True)
 
     def run(self):
         try:
@@ -268,6 +366,11 @@ class MqttAisSubscriber:
 
     def stop(self):
         self._stop = True
+        if self.client:
+            try:
+                self.client.disconnect()
+            except Exception:
+                pass
 
 
 def match_detections_to_ais(detections, ais_snapshot, max_distance_km=0.5):
@@ -372,7 +475,8 @@ def main():
     topics = [t.strip() for t in topics_str.split(",") if t.strip()]
 
     if not mqtt_host:
-        print("警告 | MQTT | AIS_MQTT_HOST 未配置，AIS 使用 replay 模式（无实时数据）", flush=True)
+        print("警告 | MQTT | AIS_MQTT_HOST 未配置，AIS 使用 replay 模式（无实时数据）",
+              flush=True)
     mqtt_sub = MqttAisSubscriber(ais_store, mqtt_host, mqtt_port,
                                  mqtt_client_id, mqtt_user, mqtt_pass, topics)
     mqtt_thread = threading.Thread(target=mqtt_sub.run, daemon=True)
@@ -382,8 +486,21 @@ def main():
     def cleanup_loop():
         while True:
             time.sleep(10)
-            ais_store.cleanup()
+            n = ais_store.cleanup()
+            if n > 0:
+                print(f"信息 | AIS | 清理过期记录 {n} 条，剩余 {ais_store.count()} 条",
+                      flush=True)
     threading.Thread(target=cleanup_loop, daemon=True).start()
+
+    # 定期输出 AIS 统计
+    def stats_loop():
+        while True:
+            time.sleep(30)
+            print(f"信息 | AIS | 统计 msg={ais_store.msg_count} "
+                  f"ok={ais_store.parse_ok} fail={ais_store.parse_fail} "
+                  f"缓存={ais_store.count()} MQTT={mqtt_sub.connected}",
+                  flush=True)
+    threading.Thread(target=stats_loop, daemon=True).start()
 
     # Unix Domain Socket（多线程，每个连接一个线程）
     if os.path.exists(SOCKET_PATH):
@@ -392,12 +509,11 @@ def main():
     server.bind(SOCKET_PATH)
     server.listen(8)
     server.settimeout(1.0)
-    print(f"信息 | Sidecar | 监听 {SOCKET_PATH} AIS缓存={ais_store.count()} 坐标模拟={predictor.simulation}",
-          flush=True)
+    print(f"信息 | Sidecar | 监听 {SOCKET_PATH} 模式={predictor.mode} "
+          f"AIS缓存={ais_store.count()}", flush=True)
 
     def handle_conn(conn):
-        """处理单个持久连接：循环读取请求行并响应。"""
-        conn.settimeout(None)  # 阻塞模式，等待数据
+        conn.settimeout(None)
         buf = b""
         try:
             while True:
@@ -412,11 +528,14 @@ def main():
                     try:
                         req = json.loads(line)
                         resp = handle_request(req, predictor, ais_store)
-                        conn.sendall((json.dumps(resp, separators=(',', ':')) + "\n").encode("utf-8"))
+                        conn.sendall(
+                            (json.dumps(resp, separators=(',', ':')) + "\n")
+                            .encode("utf-8"))
                     except json.JSONDecodeError:
-                        conn.sendall(b'{\'error\':\'invalid json\'}\n')
+                        conn.sendall(b'{"error":"invalid json"}\n')
                     except Exception as e:
-                        conn.sendall(json.dumps({"error": str(e)}).encode() + b"\n")
+                        conn.sendall(
+                            json.dumps({"error": str(e)}).encode() + b"\n")
         except Exception:
             pass
         finally:
@@ -428,7 +547,8 @@ def main():
     while True:
         try:
             conn, _ = server.accept()
-            threading.Thread(target=handle_conn, args=(conn,), daemon=True).start()
+            threading.Thread(target=handle_conn, args=(conn,),
+                             daemon=True).start()
         except socket.timeout:
             continue
         except KeyboardInterrupt:

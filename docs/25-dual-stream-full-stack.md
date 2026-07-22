@@ -79,9 +79,13 @@ B 路修复前 2.48fps，修复后（jitter buffer）9.05fps。
 
 ## 坐标预测状态
 
-- sklearn/joblib 不可用（板端无 scipy wheel）
-- 降级为接口模拟（基于检测框位置线性映射）
-- 真实模型待 x86 导出为 JSON 后增加 C++ 推理器
+- sklearn 1.3.2 + scipy 1.10.1 已安装（pip3）
+- A/B 坐标模型通过 joblib 原生加载成功
+- A 路：4特征[x1,y1,x2,y2] -> (lon,lat)，100棵树
+- B 路：2特征[x_center,y_center] -> (lon,lat)，100棵树
+- 预测耗时：A=0.56ms/次 B=0.62ms/次（满足30ms超时）
+- 坐标在杭州湾区域（lon~121.05 lat~30.57）
+- 端到端验证：双路60s测试A路280个JSONL事件，坐标与模拟模式不同（确认真实模型生效）
 
 ## MQTT/AIS 状态
 
