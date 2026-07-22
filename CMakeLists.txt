@@ -59,6 +59,7 @@ add_library(hzw_inf STATIC
   src/config/stream_profile.cpp
   src/config/application_config.cpp
   src/monitoring/pipeline_metrics.cpp
+  src/monitoring/video_health_server.cpp
   src/pipeline/single_stream_pipeline.cpp
   src/application/dual_stream_application.cpp
   src/business/business_enrichment_client.cpp)

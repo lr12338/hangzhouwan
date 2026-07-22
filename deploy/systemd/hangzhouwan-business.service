@@ -12,7 +12,9 @@ User=linaro
 Group=linaro
 WorkingDirectory=/opt/hangzhouwan/current
 EnvironmentFile=/etc/hangzhouwan/business.env
-ExecStart=/opt/hangzhouwan/current/venv/bin/python3 -m services.business_enrichment.app
+ExecStart=/opt/hangzhouwan/current/venv/bin/python3 \
+  -m services.business_enrichment.app \
+  --config /etc/hangzhouwan/application.yaml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=4096

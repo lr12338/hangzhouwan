@@ -14,7 +14,7 @@ except ImportError:
 DEFAULTS = {
     "environment": "development",
     "log_level": "INFO",
-    "socket_path": "/tmp/hangzhouwan-business.sock",
+    "socket_path": "/run/hangzhouwan/business.sock",
     "coordinate_mode": "sklearn",
     "model_a_path": "weights/0121_random_forest_model.pkl",
     "model_b_path": "weights/beishang_x-l.pkl",
@@ -172,6 +172,19 @@ class BusinessConfig:
             self._data["mqtt_reconnect_sec"] = mqtt["reconnect_sec"]
         if mqtt.get("topics"):
             self._data["mqtt_topics"] = ",".join(mqtt["topics"])
+        # Resolve sensitive fields via env var names declared in YAML
+        # (same mechanism as C++ ApplicationConfig::resolve_env).
+        for cfg_key, yaml_key in (
+            ("mqtt_host", "host_env"),
+            ("mqtt_client_id", "client_id_env"),
+            ("mqtt_username", "username_env"),
+            ("mqtt_password", "password_env"),
+        ):
+            env_name = mqtt.get(yaml_key)
+            if env_name:
+                val = os.environ.get(env_name)
+                if val is not None:
+                    self._data[cfg_key] = val
 
         log = doc.get("logging", {})
         if log.get("disk_threshold_mb"):

@@ -103,6 +103,17 @@ class SingleStreamPipeline {
 
   const PipelineMetrics& metrics() const { return metrics_; }
 
+  // Business 连接状态（供健康接口读取）
+  EnrichmentState business_state() const {
+    return business_client_ ? business_client_->state() : EnrichmentState::DETECTION_ONLY;
+  }
+  int business_degrade_count() const {
+    return business_client_ ? business_client_->degrade_count() : 0;
+  }
+  int business_recover_count() const {
+    return business_client_ ? business_client_->recover_count() : 0;
+  }
+
  private:
   void capture_loop(const PipelineConfig& cfg);
   void decode_loop(const PipelineConfig& cfg);

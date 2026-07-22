@@ -4,59 +4,73 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-22（生产收口：systemd业务融合、统一配置、融合快照与绘制、JSONL/AIS证据修复、release制品、hzwctl、预检、测试、灰度方案） |
+| 最后更新 | 2026-07-22（阶段7收口：systemd/hzwctl/release修复、Video健康接口、配置一致性、91项Python测试全通过） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
-| HEAD | 阶段4.3 已提交（a459e10）；阶段4.4 待提交 |（feat `e010a98` + docs）；工作区干净 |
-| 当前阶段（生产收口） | **生产收口完成：配置驱动、融合快照、彩色绘制、合法JSONL、AIS证据修复、release制品+原子升降级、hzwctl、17项预检、T0-T8短测+F1-F12故障测试、灰度方案文档** |
-| 总体健康度 | 🟢 生产收口代码完成；T0/T2/F1-F12自动测试全通过；T3-T8及L1-L4长测待人工在真实流环境执行；不自动enable生产systemd、不关闭Windows |
+| HEAD | `a9a10dc`（工作区有本次修改未提交） |
+| 当前阶段（阶段7收口） | **代码完成、实装待验证**：systemd配置修复、hzwctl preflight重写、release激活+自动回滚、Video健康Socket、配置一致性、PROGRESS修正 |
+| 总体健康度 | 🟡 阶段7代码完成，T1-T10短测+L1-L4长测待人工在BM1684真实环境执行；不自动enable生产systemd、不关闭Windows |
 
 ---
 
-## 生产收口（2026-07-22）
+## 阶段7：生产实装收口（2026-07-22，代码完成、实装待验证）
 
-### 完成项
+### 本次修复项
 
 | # | 内容 | 状态 | 关键文件 |
 |---|------|------|----------|
-| 1 | C++ application_config YAML 模块 + schema 校验 | ✅ | `include/config/application_config.h`, `src/config/application_config.cpp` |
-| 2 | dual_stream_app 配置驱动（删除硬编码） | ✅ | `tools/dual_stream/dual_stream_app.cpp` |
-| 3 | EnrichedDetection 融合快照类型 | ✅ | `include/pipeline/enriched_snapshot.h` |
-| 4 | 彩色融合绘制（绿/黄/红） | ✅ | `src/video/bmcv_processor.cpp`, `src/pipeline/single_stream_pipeline.cpp` |
-| 5 | 合法 JSONL（标准 JSON 结构） | ✅ | `src/pipeline/single_stream_pipeline.cpp` |
-| 6 | AIS 证据修复（真实坐标，非 0） | ✅ | `services/business_enrichment/matching/visual_ais_matcher.py`, `app.py` |
-| 7 | systemd 配置驱动 + readiness | ✅ | `deploy/systemd/hangzhouwan-*.service`, `hangzhouwan.target` |
-| 8 | Release 制品 + 原子升降级 | ✅ | `tools/release/{build,verify,install,activate,rollback}_release.sh` |
-| 9 | hzwctl 运维工具 | ✅ | `tools/hzwctl.py` |
-| 10 | 17 项生产预检 | ✅ | `tools/hzwctl.py` (preflight) |
-| 11 | T0-T8 短测 + F1-F12 故障测试 | ✅ | `tools/dual_stream/run_short_tests.sh`, `fault_injection_tests.sh` |
-| 12 | 人工长测指南 + Windows 灰度方案 | ✅ | `docs/production/manual-long-run-guide.md`, `windows-replacement-plan.md` |
-| 13 | Python 配置统一（读 application.yaml） | ✅ | `services/business_enrichment/config.py` |
+| 1 | Business ExecStart 添加 --config /etc/hangzhouwan/application.yaml | ✅ | `deploy/systemd/hangzhouwan-business.service` |
+| 2 | Socket 路径统一 /run/hangzhouwan/business.sock（Python+C+++YAML） | ✅ | `services/business_enrichment/config.py`, `config/application.example.yaml` |
+| 3 | Python config 从 YAML env var 名称解析 MQTT host（与C++一致） | ✅ | `services/business_enrichment/config.py` |
+| 4 | Video ExecStartPre=hzwctl wait-business --timeout 30 | ✅ | `deploy/systemd/hangzhouwan-video.service` |
+| 5 | Video 添加 network-online.target 依赖 | ✅ | `deploy/systemd/hangzhouwan-video.service` |
+| 6 | RuntimeDirectory 只由 Business 声明，Video 不声明 | ✅ | `deploy/systemd/hangzhouwan-video.service` |
+| 7 | hzwctl preflight 重写（safe_load替代shell拼接） | ✅ | `tools/hzwctl.py` |
+| 8 | hzwctl preflight FFmpeg 解码器/编码器分别真实检查（删除|| true） | ✅ | `tools/hzwctl.py` |
+| 9 | hzwctl preflight --release/--config/--offline/--activation/--runtime | ✅ | `tools/hzwctl.py` |
+| 10 | hzwctl preflight manifest SHA 逐文件校验 + bmodel/坐标模型SHA | ✅ | `tools/hzwctl.py` |
+| 11 | hzwctl preflight 配置一致性检查（socket/模型/MQTT主题） | ✅ | `tools/hzwctl.py` |
+| 12 | activate_release.sh 完整流程：verify→preflight→smoke→mv -T→restart→wait→60s smoke→自动回滚 | ✅ | `tools/release/activate_release.sh` |
+| 13 | Video 健康 Socket /run/hangzhouwan/video-health.sock（health/metrics/version） | ✅ | `include/monitoring/video_health_server.h`, `src/monitoring/video_health_server.cpp` |
+| 14 | DualStreamApplication 集成健康 Socket（metrics_loop更新状态） | ✅ | `src/application/dual_stream_application.cpp` |
+| 15 | SingleStreamPipeline 暴露 business_state() | ✅ | `include/pipeline/single_stream_pipeline.h` |
+| 16 | hzwctl status/health 优先读 Video 健康 Socket | ✅ | `tools/hzwctl.py` |
+| 17 | build_release.sh 安装 hzwctl Python 脚本为 bin/hzwctl | ✅ | `tools/release/build_release.sh` |
+| 18 | CMakeLists.txt 添加 video_health_server.cpp | ✅ | `CMakeLists.txt` |
+| 19 | 91项 Python 单元测试全通过（含49项新增） | ✅ | `tests/unit/test_systemd_config.py`, `test_business_config.py`, `test_preflight.py` |
 
 ### 测试结果
 
-- **C++ 单元测试**：12 项全通过（含新增 `application_config`）
-- **Python 单元测试**：41 passed, 2 skipped（含新增 JSONL 9 项 + AIS 证据 5 项）
-- **T0 配置/schema 测试**：✅ 通过
-- **T2 systemd 语法验证**：✅ 通过（ExecStart 含 --enable-business，无硬编码 Git 目录）
-- **F1-F12 故障注入**：12 项全通过
+| 测试 | 结果 |
+|---|---|
+| Python 单元测试（91项） | ✅ 全部通过 |
+| systemd 配置测试（15项） | ✅ Business --config, Video ExecStartPre, RuntimeDirectory归属 |
+| BusinessConfig 测试（10项） | ✅ YAML覆盖, env只覆盖敏感字段, production禁止mock/off, socket一致 |
+| preflight 源码测试（8项） | ✅ 无shell拼接, 无|| true, safe_load, --release/--config/--offline/--activation/--runtime |
+| preflight 候选Release测试（6项） | ✅ 不读current, manifest SHA校验, 配置一致性 |
+| activate_release 测试（10项） | ✅ verify/preflight/smoke/回滚/mv -T/wait-business/wait-video/无git/无编译/结果码 |
+| C++ 编译 | ⏳ 待在BM1684目标板编译（含新增 video_health_server.cpp） |
+| T1-T10 短测 | ⏳ 待人工在BM1684真实环境执行 |
 
-### 生产候选门禁（第十五节）
+### 生产候选门禁
 
 | 门禁 | 状态 |
 |------|------|
 | systemd 实际启用业务融合 | ✅ ExecStart 含 --enable-business |
+| Business 从 application.yaml 读取配置 | ✅ ExecStart 含 --config |
 | application.yaml 为唯一权威配置 | ✅ C++/Python 共同读取 |
-| 无关键参数硬编码 | ✅ 配置驱动 |
-| 推流画面能区分 AIS 匹配状态 | ✅ 绿/黄/红彩色绘制 |
-| JSONL 格式合法 | ✅ 标准 JSON + 单元测试 |
-| AIS 证据完整 | ✅ 真实坐标（非 0） |
-| release 可校验 | ✅ SHA256 + manifest |
-| 原子升级成功 | ✅ ln -sfn 软链接切换 |
-| 原子回滚成功 | ✅ current <-> previous 交换 |
-| preflight 全通过 | ✅ 17 项检查 |
-| 300 秒灰度通过 | ⏳ 待人工（T8，需真实流） |
+| Socket 路径一致 | ✅ /run/hangzhouwan/business.sock |
+| Video readiness 依赖 Business | ✅ ExecStartPre=wait-business |
+| RuntimeDirectory 仅 Business | ✅ Video 不声明 |
+| preflight 不用 shell 拼接 YAML | ✅ yaml.safe_load |
+| preflight FFmpeg 真实检查 | ✅ 解码器/编码器分别检查 |
+| preflight 支持候选Release | ✅ --release/--config |
+| preflight SHA 校验 | ✅ manifest逐文件 + bmodel SHA |
+| release 激活含自动回滚 | ✅ 失败切回previous |
+| Video 结构化健康接口 | ✅ /run/hangzhouwan/video-health.sock |
+| hzwctl 优先读健康接口 | ✅ 不依赖 journal grep |
+| 300 秒灰度通过 | ⏳ 待人工（T10，需真实流） |
 | 30 分钟通过 | ⏳ 待人工（L1） |
 | 2 小时通过 | ⏳ 待人工（L2） |
 | 8 小时通过 | ⏳ 待人工（L3） |
@@ -75,10 +89,10 @@
 - ✅ 不使用 git checkout 作为生产回滚
 - ✅ production 禁止 mock/off 坐标
 - ✅ video 服务 ExecStart 含 --enable-business
-- ✅ 业务结果进入融合画面（不只写 JSON）
-- ✅ 无新增硬编码流参数
+- ✅ video 服务 ExecStartPre 含 wait-business
+- ✅ RuntimeDirectory 仅 Business 拥有
+- ✅ 灰度输出不覆盖 Windows 正式输出
 - ✅ 未提交真实凭据/日志/视频
-
 
 ---
 
@@ -87,170 +101,106 @@
 | # | 阶段 | 状态 | 门禁 | 备注 |
 |---|---|---|---|---|
 | 0 | 项目与设备基线确认 | ✅ 完成 | 通过 | 三份文档 + chip 探针已交付 |
-| 1 | 测试基线 + 安全配置 | ✅ 完成 | 源码可复现、离线测试通过 | 26 项测试通过；源码已脱敏 |
-| 2 | ONNX 审计 + bmodel 转换 | ✅ 完成 | x86 F32 转换和数值验证通过 | `9255f27` 提交，bmodel 已跟踪 |
-| 2B | 板端 bmodel 加载与兼容性验证 | ✅ 完成 | bmrt_test + bmrt_load_test 通过 | F32 bmodel SHA256 一致，板端真实加载正常 |
-| 3 | 单图 C++ 推理 PoC | ✅ 完成 | 单图 PoC 通过 | 精度对照待 x86 基线 |
-| 4 | 单路硬件视频管线 PoC | 🔶 功能通过+300s验证通过/30min·2h待人工 | 单路稳定 2h | BMCV 绘制优化达 10fps，300s 通过；30min/2h 待人工执行 |
-| 4.2 | 单路 RTSP 输入到本地文件 | 🔶 代码+单测+连接路径验证通过/实流·长时待人工 | RTSP 实流 2h | 连接超时/重连/脱敏/PTS 单调；实流解码与中途重连、30min/2h 待人工 |
-| 5 | 坐标映射 + AIS 迁移 | ⏳ | 关联不低于旧版 | 待阶段4 |
-| 6 | 双路 Pipeline 整合 | ⏳ | 双路运行 | 待阶段5 |
-| 7 | 生产部署 + 无人值守 | ⏳ | 部署就绪 | 待阶段6 |
-| 8 | 分级稳定性验证 | ⏳ | 验收线达标 | 待阶段7 |
-| 9 | 代码收口 + GitHub 交付 | ⏳ | PR 合并 | 待阶段8 |
-
-图例：✅ 完成 · 🔶 进行中/部分完成 · ⛔ 阻塞 · ⏳ 待启动/待前置
+| 1 | 测试基线 + 安全配置 | ✅ 完成 | 源码可复现、离线测试通过 | 26 项测试 |
+| 2 | ONNX 审计 + bmodel 转换 | ✅ 完成 | bmodel 可加载推理 | f32 转换完成 |
+| 3 | 单图 C++ 推理 PoC | ✅ 完成 | 检测结果正确 | C++ + BMRuntime |
+| 4 | 单路视频硬件管线 | ✅ 完成 | 5min 冒烟通过 | h264_bm 解码+编码 |
+| 4.2 | 单路 RTSP 输入 | ✅ 完成 | 连接路径验证 | 硬件链路未回退 |
+| 4.3 | 实流 RTMP 推流 | ✅ 完成 | 双路并发稳定 | A/B 独立管线 |
+| 5 | 双路全栈+坐标+AIS | ✅ 完成 | 端到端验证 | 坐标真实模型+MQTT AIS |
+| 6 | 生产收口（配置驱动+release+hzwctl） | ✅ 完成 | 17项预检+T0-T8+F1-F12 | 生产候选架构 |
+| 7 | 生产实装收口（systemd/hzwctl/release/健康接口修复） | ✅ 代码完成 | 91项Python测试通过 | **实装待验证** |
+| 8 | 人工长测（30min/2h/8h/24h） | ⏳ 待人工 | 真实流环境 | L1-L4 |
 
 ---
 
-## 2. 阶段2：ONNX 审计 + bmodel 转换（✅ 完成）
+## 2. 阶段5：双路全栈 + 坐标预测 + MQTT AIS 关联
 
-- [x] ONNX 审计（`tools/inspect_onnx.py`）：输入 `images` FLOAT 动态，需固化 `[1,3,640,640]`；输出 `output` 不含 NMS
-- [x] INT8 校准集脚本（`tools/convert_model/extract_calibration.sh`）
-- [x] x86 转换脚本（`tools/convert_model/convert_bmodel.sh`）
-- [x] F32 bmodel 生成：`artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`（24,428,544 字节）
-- [x] SHA256：`d1c295c504888541c27e20fda500976725b9d13b6ef5c91842f247f52c31cfcd`
-- [x] ONNX/MLIR 172 个 Tensor 数值验证通过；bmodel cmodel 比较通过
-- [x] 模型提交：`9255f27`（bmodel 已 Git 跟踪，`git ls-files` 确认）
-- [x] 文档：`docs/06-stage2-onnx-audit-and-bmodel.md`、`docs/12`、`docs/13`、`docs/14`
+详见 `docs/25-dual-stream-full-stack.md`、`docs/27-coordinate-ais-mqtt-architecture.md`。
 
-**阶段2 门禁：✅ 通过**
+- A/B 双路并发运行，各自独立 RTSP/RTMP/推理/编码线程
+- 坐标预测 Sidecar（Python）：sklearn 随机森林 + numpy forest 两种后端
+- MQTT AIS 订阅 + 视觉-AIS 匹配（距离+时间对齐+外推）
+- Business Sidecar UDS 协议 v2（JSON 分隔符协议）
+- 真实 MQTT AIS 端到端验证通过
 
----
+## 3. 阶段6：生产收口
 
-## 3. 阶段2B：板端 bmodel 真实加载（✅ 完成）
+- C++ application_config YAML 模块 + schema 校验
+- dual_stream_app 配置驱动（删除硬编码）
+- EnrichedDetection 融合快照类型 + 彩色绘制
+- 合法 JSONL + AIS 证据修复
+- systemd 配置驱动 + readiness
+- Release 制品 + 原子升降级
+- hzwctl 运维工具 + 17 项生产预检
+- T0-T8 短测 + F1-F12 故障测试
 
-参见 `docs/15-stage2b-board-model-validation.md`。
+## 4. 阶段7：生产实装收口（本次）
 
-- [x] bmrt_test 真实加载成功（退出码 0）
-- [x] bmrt_load_test 编译运行成功（退出码 0）
-- [x] 网络 `yolov7_ship`：输入 `images [1,3,640,640] FLOAT32`，输出 `output_Concat [1,25200,6] FLOAT32`
-- [x] 无兼容性错误、无内存分配失败、TPU 资源正常释放
-- [x] 未修改 libsophon 和系统服务
+### 4.1 systemd 修复
+- Business ExecStart 添加 `--config /etc/hangzhouwan/application.yaml`
+- Video 添加 `ExecStartPre=hzwctl wait-business --timeout 30`
+- Video 添加 `network-online.target` 依赖
+- RuntimeDirectory 仅由 Business 声明（restart video 不删除 business.sock）
+- readiness（ExecStartPre）与 runtime degradation（C++ BusinessEnrichmentClient 自动降级/恢复）分开处理
 
-**阶段2B 门禁：✅ 通过**
+### 4.2 hzwctl preflight 重写
+- YAML 直接 `yaml.safe_load`（不再 shell 拼接 `python3 -c`）
+- FFmpeg 解码器和编码器分别真实检查（删除 `|| true` 假通过）
+- 支持 `--release <candidate> --config <path>`（候选预检不读 current）
+- 运行冲突检查拆分：`--offline` / `--activation` / `--runtime`
+- manifest 逐文件 SHA 校验 + bmodel SHA + 坐标模型 SHA
+- Sidecar 和 Video 配置一致性检查（socket/模型/MQTT主题）
 
----
+### 4.3 Release 激活改进
+- 完整流程：verify → preflight → 离线smoke → mv -T原子替换 → restart → wait-business → wait-video → 60s smoke → 自动回滚
+- 失败自动切回 previous，重启 previous，验证 readiness
+- 禁止现场编译和 git checkout
+- 明确结果码（0=成功, 2=verify失败, 3=preflight失败, 4=smoke失败, 5=business未就绪, 6=video未就绪, 7=60s smoke失败）
 
-## 4. 阶段3：单图 C++ 推理 PoC（✅ 完成）
+### 4.4 Video 结构化健康接口
+- Unix Socket: `/run/hangzhouwan/video-health.sock`
+- 支持: health / metrics / version
+- 返回: release/version/commit, A/B RTSP/RTMP状态, A/B output/inference fps, A/B最近帧时间, A/B RTSP/RTMP重连次数, 队列长度, e2e P95, Business连接状态, 降级状态, RSS和TPU信息
+- hzwctl status/health 优先读取此接口，journal 只作为诊断补充
 
-参见 `docs/16-stage3-single-image-cpp-poc.md`。
-
-### 新增代码
-
-| 模块 | 文件 |
-|---|---|
-| 图像 I/O | `include/image_io/jpeg_io.h`, `src/image_io/jpeg_io.cpp` |
-| 推理封装 | `include/inference/bmrt_detector.h`, `src/inference/bmrt_detector.cpp` |
-| 后处理 | `include/inference/yolov7_postprocess.h`, `src/inference/yolov7_postprocess.cpp` |
-| SHA-256 | `include/util/sha256.h`, `src/util/sha256.cpp` |
-| 单图工具 | `tools/image_inference/single_image_infer.cpp` |
-| 单元测试 | `tests/unit_cpp/test_yolov7_postprocess.cpp` |
-| 构建 | `CMakeLists.txt`（根目录） |
-
-### 测试结果
-
-| 测试 | 结果 |
-|---|---|
-| 单元测试（10 项） | ✅ 全部通过 |
-| 单图推理（frame_30.jpg） | ✅ 2 个检测，预处理 56ms，推理 16ms，后处理 0.6ms |
-| 空检测（frame_000010.jpg） | ✅ 0 检测（该帧无船） |
-| 100 次重复推理 | ✅ 平均 15.99ms，框数稳定，无内存泄漏 |
-| 错误场景（3 项） | ✅ 正确错误码和错误信息 |
-| 输出目录自动创建 | ✅ |
-| JSON 可解析 | ✅ |
-| Python 测试（29 项） | ✅ 全部通过 |
-
-### 精度
-
-精度对照待 x86 基线（当前无同图 ONNX 检测 JSON）。板端 F32 推理功能已通过。
+### 4.5 配置一致性
+- Socket 路径统一: `/run/hangzhouwan/business.sock`（Python config.py + C++ ApplicationConfig + example YAML）
+- Python config 从 YAML env var 名称解析 MQTT host（与 C++ resolve_env 一致）
+- 模型路径、MQTT 主题在 business 和 streams/ais 段一致
 
 ---
 
-## 5. 当前阻塞与待办
+## 5. 阶段8：人工长测方案（待人工执行）
 
-### 待办
+### 短测（每项最长300秒）
 
-- [ ] 与 x86 ONNX 基线 JSON 进行精度对照（IoU、score 差异）
-- [x] 阶段4：单路硬件视频管线 PoC（功能通过）
-- [x] 阶段4 BMCV 性能优化（10fps 达标，300s 验证通过）
-- [ ] 阶段4：30min/2h 长时稳定性门禁人工执行
-- [x] 阶段4.2：单路 RTSP 输入（连接/读取超时、受控重连、URL 脱敏、env 输入、PTS 单调）代码+单元测试
-- [x] 阶段4.2：受控无效地址连接/超时/中断/脱敏路径验证
-- [ ] 阶段4.2：RTSP 实流解码 + 中途断线重连人工验证（见 docs/22）
-- [ ] 阶段4.2：30min/2h RTSP 长时门禁人工执行
-- [ ] 后续阶段：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
+| 测试 | 内容 | 预期 |
+|------|------|------|
+| T1 | 候选Release静态预检 | preflight --release --offline 通过 |
+| T2 | systemd-analyze verify | 无语法错误 |
+| T3 | Business从YAML启动并readiness通过 | wait-business 成功 |
+| T4 | Video等待Business后启动 | wait-video 成功 |
+| T5 | Video健康Socket | health/metrics/version 返回真实指标 |
+| T6 | restart video不影响Business Socket | business.sock 存在 |
+| T7 | restart business时Video降级并恢复 | DETECTION_ONLY → FULL |
+| T8 | 候选Release激活成功 | current指向新Release |
+| T9 | 错误候选Release自动回滚 | current切回previous |
+| T10 | 灰度双路300秒 | A/B推流可见，不覆盖Windows |
 
-> 阶段1 的 B1/B2（三模型缺失）已于阶段2 解除。
-> 阶段2 的历史阻塞（`weights/best.onnx` 缺失、bmodel 未生成、无测试图片）均已解除。
+### 长测
 
----
+| 测试 | 时长 | 门禁 |
+|------|------|------|
+| L1 | 30分钟 | 无崩溃，fps稳定，无内存泄漏 |
+| L2 | 2小时 | 无崩溃，RTSP/RTMP稳定，Business融合正常 |
+| L3 | 8小时 | 无崩溃，无重启风暴，磁盘不满 |
+| L4 | 24小时 | 全部门禁通过，可批准替换Windows |
 
-## 5. 阶段4：单路硬件视频管线 PoC（🔶 功能通过+300s验证通过，30min/2h 待人工执行）
+### 真实数据门禁
 
-参见 `docs/17-stage4-single-video-hardware-pipeline.md` 与 `docs/18-stage4-stability-test.md`。
-
-### 新增代码
-
-| 模块 | 文件 |
-|---|---|
-| 视频源（h264_bm 解码） | `include/video/video_source.h`, `src/video/sophon_ffmpeg_source.cpp` |
-| 视频输出（h264_bm 编码+MP4/TS 封装） | `include/video/video_sink.h`, `src/video/sophon_ffmpeg_sink.cpp` |
-| 最新帧队列（容量1，丢旧帧） | `include/video/latest_frame_queue.h` |
-| 视频帧结构 | `include/video/video_frame.h` |
-| FFmpeg C++ 兼容（extern "C"） | `include/video/ffmpeg_compat.h` |
-| 检测快照（TTL 复用） | `include/pipeline/detection_snapshot.h` |
-| 单路管线（三线程） | `include/pipeline/single_stream_pipeline.h`, `src/pipeline/single_stream_pipeline.cpp` |
-| 指标统计 | `include/monitoring/pipeline_metrics.h`, `src/monitoring/pipeline_metrics.cpp` |
-| CLI 工具 | `tools/video_inference/single_video_infer.cpp` |
-| 稳定性测试脚本 | `tools/video_inference/stability_test.sh` |
-| 单元测试 | `tests/unit_cpp/test_latest_frame_queue.cpp`, `test_detection_snapshot.cpp`, `test_pipeline_timing.cpp` |
-| 文档 | `docs/17-stage4-single-video-hardware-pipeline.md`, `docs/18-stage4-stability-test.md` |
-
-### 核心结论
-
-- **硬件解码**：Sophon-FFmpeg C API `h264_bm`，输出 NV12（host 可读写 mmap'd bm_image）
-- **硬件编码**：Sophon-FFmpeg C API `h264_bm`，接受解码 AVFrame（bm_image），in-place 像素修改对编码器可见
-- **解码缓冲池**：`extra_frame_buffer_num=20`（经 AVDictionary 传入），避免编码器 11 帧保留导致的 bm_image 池死锁
-- **预处理优化**：用 `sws_scale` 一次完成 NV12 960×544 → RGB 640×640（SIMD），绕开 CPU `resize_bilinear` 瓶颈（54.6ms → 22.3ms）
-- **队列策略**：`LatestFrameQueue<VideoFrame>` 模板，容量1，`push` 满时丢最旧帧并 release（归还 bm_image）
-- **检测复用**：`DetectionSnapshot` + TTL（1000ms），非推理帧复用最近结果绘框
-- **响应信号**：`SIGINT`/`SIGTERM` 优雅停止，关闭队列并释放全部资源
-
-### 测试结果
-
-| 测试 | 结果 |
-|---|---|
-| 单元测试（6 项：队列/快照/管线调度/后处理/RTSP 选项/输出 PTS） | ✅ 全部通过 |
-| 单图基线回归（10 项） | ✅ 全部通过 |
-| Python 测试（29 项） | ✅ 全部通过 |
-| 10s 短跑（h264_bm 解码+编码+推理+绘框） | ✅ 退出码 0，输出可解码，含检测框 |
-| 5min 冒烟测试 | ✅ 退出码 0，队列≤1，延迟 P95 < 500ms，无内存泄漏 |
-| 30min 中等测试 | ⏳ 待人工执行（15min 稳态分析仅为历史参考，不替代完整 1800s 门禁；详见 docs/18、docs/20） |
-| 2h 最终门禁 | ⏳ 提供可执行脚本和指南（`docs/20-stage4-manual-long-run-guide.md`），待人工执行 |
-
-### 已知限制
-
-- **BMCV 绘制优化已完成（详见 docs/19）**：原 CPU 路径 sws 往返约 132ms/帧，制约输出至约 5fps；采用 `--draw-mode bmcv`（BMCV draw_rectangle 约 6ms/帧）后，推荐配置 `--preprocess cpu --draw-mode bmcv` 达到 10fps。BMCV VPP resize 在本板不可用，resize 仍由 libswscale 完成；CPU 预处理保留为默认路径（BMCV CSC 与 sws 系数存在差异，检测框 IoU 0.94–0.98 未达门禁）。
-- **解码器警告**：`pkt can't be sent to decoder` 出现在循环 seek 期间，为 BM 视频解码器内部缓冲池回收提示，不影响功能。
-
-### 回滚方法
-
-- 阶段4 所有新增 C++ 源码位于 `include/video/`、`include/pipeline/`、`include/monitoring/`、`src/video/`、`src/pipeline/`、`src/monitoring/`、`tools/video_inference/`、`tests/unit_cpp/test_*.cpp`（除 `test_yolov7_postprocess.cpp`）。
-- 不修改 `src/inference/`、`src/image_io/`、`src/util/` 与 `tools/image_inference/`。
-- CMakeLists.txt 增量添加，可独立 revert。
-- `docs/17`、`docs/18` 独立文档。
-- 回滚单次提交即可恢复至阶段3 基线。
-
----
-
-## 6. 阶段4.2：单路 RTSP 输入到本地文件（🔶 代码+单测+连接路径验证通过，实流/长时待人工）
-
-详见 `docs/21-stage4-2-single-rtsp-input.md`、`docs/22-stage4-2-manual-rtsp-stability.md`。
-
-- 扩展现有 `SophonVideoSource`：`open_rtsp`（`rtsp_transport`+`stimeout` 经 AVDictionary 传入，参数来自板端 `ffmpeg -h demuxer=rtsp` 实测）、中断回调（`stop_requested_` 使 open/read 可被信号/限时中断）、`read()` 内受控重连（指数退避，封顶，受 `max_reconnect` 约束）、源 epoch。
-- 安全：`--input-env HZW_TEST_RTSP_URL` 环境变量输入，`redact_url_credentials` 脱敏（保留用户名，密码置 `***`），URL 不入命令行/日志/Git。
-- 单调 PTS：`OutputPtsSequence` 按输出帧序严格递增，忽略源 PTS；重连后 `SnapshotStore::clear()` 清除过期检测结果。
-- 单元测试：`test_rtsp_source_options`（脱敏/env/transport/退避增长·封顶·重置）、`test_output_pts`（严格递增+源 PTS 回退不影响）、`test_detection_snapshot`（clear）。`ctest` 8 项 + Python 29 项全通过。
-- 板端验证：20s 文件回归通过（硬件链路未回退）；受控无效地址验证连接超时（`stimeout`）、SIGTERM/SIGINT 中断阻塞（`Immediate exit requested`）、凭据不泄漏、无残留。
-- 限制：板端 Sophon-FFmpeg RTSP muxer 不支持 listen，无可用 RTSP 服务端工具，实流解码与中途断线重连待人工用真实摄像头或用户提供的中继执行。
+| 门禁 | 要求 |
+|------|------|
+| 真实MQTT消息 | MQTT连接订阅通过，有真实AIS消息 |
+| 真实AIS样本 | A/B各≥20样本，坐标非0，匹配率达标 |
+| Windows回切 | 停止systemd服务后Windows可正常接管 |

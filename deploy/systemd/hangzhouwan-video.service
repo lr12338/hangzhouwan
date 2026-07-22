@@ -1,7 +1,8 @@
 [Unit]
 Description=Hangzhou Bay Video Pipeline Service (Dual Stream)
 Requires=hangzhouwan-business.service
-After=hangzhouwan-business.service
+After=hangzhouwan-business.service network-online.target
+Wants=network-online.target
 PartOf=hangzhouwan.target
 StartLimitIntervalSec=120
 StartLimitBurst=5
@@ -12,6 +13,8 @@ User=linaro
 Group=linaro
 WorkingDirectory=/opt/hangzhouwan/current
 EnvironmentFile=/etc/hangzhouwan/video.env
+ExecStartPre=/opt/hangzhouwan/current/bin/hzwctl \
+  wait-business --timeout 30
 ExecStart=/opt/hangzhouwan/current/bin/dual_stream_app \
   --config /etc/hangzhouwan/application.yaml \
   --enable-business \
@@ -22,8 +25,6 @@ LimitNOFILE=8192
 KillSignal=SIGTERM
 TimeoutStartSec=60
 TimeoutStopSec=15
-RuntimeDirectory=hangzhouwan
-RuntimeDirectoryMode=0755
 StateDirectory=hangzhouwan
 LogsDirectory=hangzhouwan
 StandardOutput=journal

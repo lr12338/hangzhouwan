@@ -36,9 +36,11 @@ sudo chown -R "$(id -u):$(id -g)" "$RELEASE_DIR"
 # 3. 复制二进制
 echo "[3/7] 复制二进制..."
 cp "$REPO_ROOT/build/dual_stream_app" "$RELEASE_DIR/bin/"
-# hzwctl（如果已构建）
+# hzwctl（优先使用已构建版本，回退到 Python 脚本）
 if [ -f "$REPO_ROOT/build/hzwctl" ]; then
   cp "$REPO_ROOT/build/hzwctl" "$RELEASE_DIR/bin/"
+elif [ -f "$REPO_ROOT/tools/hzwctl.py" ]; then
+  cp "$REPO_ROOT/tools/hzwctl.py" "$RELEASE_DIR/bin/hzwctl"
 fi
 chmod 0755 "$RELEASE_DIR/bin/"*
 
@@ -92,6 +94,14 @@ BMODEL_SHA=""
 if [ -f "$RELEASE_DIR/models/yolov7_ship_1684_f32.bmodel" ]; then
   BMODEL_SHA=$(sha256sum "$RELEASE_DIR/models/yolov7_ship_1684_f32.bmodel" | awk '{print $1}')
 fi
+COORD_A_SHA=""
+if [ -f "$RELEASE_DIR/models/0121_random_forest_model.pkl" ]; then
+  COORD_A_SHA=$(sha256sum "$RELEASE_DIR/models/0121_random_forest_model.pkl" | awk '{print $1}')
+fi
+COORD_B_SHA=""
+if [ -f "$RELEASE_DIR/models/beishang_x-l.pkl" ]; then
+  COORD_B_SHA=$(sha256sum "$RELEASE_DIR/models/beishang_x-l.pkl" | awk '{print $1}')
+fi
 python3 -c "
 import json, os
 d = os.path.join('$RELEASE_DIR')
@@ -108,6 +118,8 @@ manifest = {
     'version': '${RELEASE_NAME}',
     'commit': '${GIT_COMMIT}',
     'bmodel_sha256': '${BMODEL_SHA}',
+    'coord_model_a_sha256': '${COORD_A_SHA}',
+    'coord_model_b_sha256': '${COORD_B_SHA}',
     'files': files,
 }
 with open(os.path.join(d, 'manifest.json'), 'w') as fh:

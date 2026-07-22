@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 #include "pipeline/single_stream_pipeline.h"
+#include "monitoring/video_health_server.h"
 
 namespace hzw {
 
@@ -35,6 +36,9 @@ class DualStreamApplication {
  public:
   DualStreamApplication() = default;
   ~DualStreamApplication();
+
+  // 获取健康状态（供外部查询）
+  const VideoHealthServer& health_server() const { return health_server_; }
 
   // 启动双路（阻塞直到两路结束）。返回 0=全部成功，非 0=至少一路失败。
   int run(const DualStreamConfig& cfg);
@@ -54,6 +58,12 @@ class DualStreamApplication {
   std::atomic<int> exit_code_a_{0};
   std::atomic<int> exit_code_b_{0};
   int64_t start_ms_ = 0;
+  VideoHealthServer health_server_;
+  int64_t prev_output_a_ = 0;
+  int64_t prev_infer_a_ = 0;
+  int64_t prev_output_b_ = 0;
+  int64_t prev_infer_b_ = 0;
+  int64_t prev_sample_ms_ = 0;
 };
 
 }  // namespace hzw

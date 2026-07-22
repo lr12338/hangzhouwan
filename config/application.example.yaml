@@ -83,7 +83,7 @@ business:
   model_b_path: ""                    # beishang_x-l.pkl 绝对路径
   reference_width: 2560
   reference_height: 1440
-  socket_path: /tmp/hangzhouwan-business.sock
+  socket_path: /run/hangzhouwan/business.sock
   request_timeout_ms: 30
   max_connections: 8
   enable_evidence_recording: false    # 生产可按需开启
