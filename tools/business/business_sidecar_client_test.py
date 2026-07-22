@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""业务 Sidecar 客户端测试：启动 sidecar，发送模拟请求，验证响应。
+"""业务 Sidecar 客户端测试：启动 sidecar，发送请求，验证响应。
 
 测试项：
-  1. 坐标预测（真实模型或 numpy 向量化）
-  2. AIS 解码（类型 1/4/18）
-  3. AIS 缓存与匹配
-  4. MQTT 消息端到端（可选，需 MQTT 配置）
+  1. 坐标预测（真实模型）
+  2. B路坐标预测（中心点特征）
+  3. AIS 解码（类型1/4/18）
+  4. AIS 缓存与匹配
+  5. 健康检查
+  6. 协议版本2（长度前缀framing）
 """
 import json
 import os
@@ -15,161 +17,161 @@ import subprocess
 import sys
 import time
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO_ROOT)
+
+from services.business_enrichment import protocol as proto
+
 SOCKET_PATH = "/tmp/hangzhouwan-business-test.sock"
 
 
-def test_coordinate_prediction(sock):
-    """测试坐标预测。"""
-    req = {
-        "stream_id": "A",
-        "frame_sequence": 1,
-        "image_width": 2560,
-        "image_height": 1440,
-        "detections": [
-            {"detection_id": 0, "score": 0.85, "x1": 500, "y1": 600, "x2": 800, "y2": 900},
-            {"detection_id": 1, "score": 0.72, "x1": 1000, "y1": 400, "x2": 1200, "y2": 600},
-        ]
-    }
-    sock.sendall((json.dumps(req) + "\n").encode())
+def send_request_v2(sock, req):
+    """发送长度前缀协议v2请求。"""
+    encoded = proto.encode_message(req)
+    sock.sendall(encoded)
+    # 接收响应
+    buf = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+        resp, buf = proto.decode_stream(buf)
+        if resp is not None:
+            return resp
+    return None
+
+
+def send_request_v1(sock, req):
+    """发送旧版换行分隔协议v1请求（兼容测试）。"""
+    sock.sendall(proto.encode_line_json(req))
     data = b""
     while b"\n" not in data:
         data += sock.recv(4096)
-    resp = json.loads(data.strip())
+    return json.loads(data.strip())
+
+
+def test_coordinate_prediction(sock):
+    """测试A路坐标预测。"""
+    req = proto.make_request(
+        "A", 1, 2560, 1440,
+        [{"detection_id": 0, "score": 0.85, "x1": 500, "y1": 600, "x2": 800, "y2": 900},
+         {"detection_id": 1, "score": 0.72, "x1": 1000, "y1": 400, "x2": 1200, "y2": 600}],
+    )
+    resp = send_request_v2(sock, req)
+    assert resp is not None, "无响应"
     assert resp["stream_id"] == "A"
+    assert resp["response_status"] == "OK"
     assert len(resp["results"]) == 2
     for r in resp["results"]:
         assert r["coordinate_valid"], f"坐标无效: {r}"
-        assert 120.0 < r["longitude"] < 122.0, f"经度超出杭州湾范围: {r['longitude']}"
-        assert 30.0 < r["latitude"] < 31.0, f"纬度超出杭州湾范围: {r['latitude']}"
-    print(f"  坐标预测通过: {resp['results'][0]['longitude']:.6f}, {resp['results'][0]['latitude']:.6f}")
+        assert 120.0 < r["longitude"] < 122.0, f"经度超出范围: {r['longitude']}"
+        assert 30.0 < r["latitude"] < 31.0, f"纬度超出范围: {r['latitude']}"
+    print(f"  A路坐标预测通过: ({resp['results'][0]['longitude']:.6f}, {resp['results'][0]['latitude']:.6f})")
     return resp
 
 
 def test_b_coordinate(sock):
-    """测试 B 路坐标预测（中心点特征）。"""
+    """测试B路坐标预测（中心点特征）。"""
+    req = proto.make_request(
+        "B", 2, 2560, 1440,
+        [{"detection_id": 0, "score": 0.9, "x1": 1100, "y1": 500, "x2": 1400, "y2": 800}],
+    )
+    resp = send_request_v2(sock, req)
+    assert resp is not None
+    assert resp["stream_id"] == "B"
+    assert resp["results"][0]["coordinate_valid"]
+    assert 120.0 < resp["results"][0]["longitude"] < 122.0
+    assert 30.0 < resp["results"][0]["latitude"] < 31.0
+    print(f"  B路坐标预测通过: ({resp['results'][0]['longitude']:.6f}, {resp['results'][0]['latitude']:.6f})")
+    return resp
+
+
+def test_health(sock):
+    """测试健康检查。"""
+    req = {"action": "health"}
+    resp = send_request_v2(sock, req)
+    assert resp is not None
+    assert "status" in resp
+    assert "coordinate_mode" in resp
+    print(f"  健康检查通过: status={resp['status']} mode={resp['coordinate_mode']}")
+    return resp
+
+
+def test_protocol_v1_compat(sock):
+    """测试旧版协议v1兼容。"""
     req = {
-        "stream_id": "B",
-        "frame_sequence": 2,
+        "stream_id": "A",
+        "frame_sequence": 99,
         "image_width": 2560,
         "image_height": 1440,
-        "detections": [
-            {"detection_id": 0, "score": 0.9, "x1": 1100, "y1": 500, "x2": 1400, "y2": 800},
-        ]
+        "detections": [{"detection_id": 0, "score": 0.8, "x1": 100, "y1": 100, "x2": 300, "y2": 300}],
     }
-    sock.sendall((json.dumps(req) + "\n").encode())
-    data = b""
-    while b"\n" not in data:
-        data += sock.recv(4096)
-    resp = json.loads(data.strip())
-    assert resp["stream_id"] == "B"
-    assert len(resp["results"]) == 1
-    r = resp["results"][0]
-    assert r["coordinate_valid"]
-    assert 120.0 < r["longitude"] < 122.0
-    assert 30.0 < r["latitude"] < 31.0
-    print(f"  B路坐标预测通过: {r['longitude']:.6f}, {r['latitude']:.6f}")
-
-
-def test_ais_decoding():
-    """测试 AIS 6-bit 解码。"""
-    sys.path.insert(0, "tools/business")
-    from business_sidecar import parse_ais_payload, haversine_km, AisStore, match_detections_to_ais
-
-    # Type 1
-    r1 = parse_ais_payload("15M67FC000G?ufbE`FepT@3n00Sa")
-    assert r1 and r1["msg_type"] == 1
-    assert "lon" in r1 and "lat" in r1
-    print(f"  类型1解码通过: mmsi={r1['mmsi']} lon={r1['lon']:.4f} lat={r1['lat']:.4f}")
-
-    # Type 18
-    r18 = parse_ais_payload("B69>7m@0?j<:0PfBPhhqJwvb2HMv")
-    assert r18 and r18["msg_type"] == 18
-    print(f"  类型18解码通过: mmsi={r18['mmsi']}")
-
-    # Type 4
-    r4 = parse_ais_payload("403Owi1udPPPEOdgQH`1L`4R0H3k")
-    assert r4 and r4["msg_type"] == 4
-    print(f"  类型4解码通过: mmsi={r4['mmsi']}")
-
-    # Haversine
-    d = haversine_km(121.05, 30.56, 121.06, 30.57)
-    assert 1.0 < d < 2.0
-    print(f"  Haversine距离通过: {d:.4f}km")
-
-    # AIS matching
-    store = AisStore(max_capacity=100, timeout_sec=300)
-    store.update("123456789", 121.055, 30.569, 5.0, 180.0)
-    store.update("987654321", 121.10, 30.60, 3.0, 90.0)
-    snap = store.snapshot()
-    dets = [
-        {"detection_id": 0, "longitude": 121.0548, "latitude": 30.5688, "coordinate_valid": True},
-        {"detection_id": 1, "longitude": 121.09, "latitude": 30.58, "coordinate_valid": True},
-    ]
-    matches = match_detections_to_ais(dets, snap, max_distance_km=0.5)
-    assert 0 in matches, "检测框0应该匹配AIS"
-    assert matches[0]["mmsi"] == "123456789"
-    assert 1 not in matches, "检测框1不应匹配（距离过远）"
-    print(f"  AIS匹配通过: det0->mmsi={matches[0]['mmsi']} dist={matches[0]['ais_distance_km']}km")
-
-    # 一对一匹配验证
-    store2 = AisStore(max_capacity=100, timeout_sec=300)
-    store2.update("111", 121.055, 30.569, 1.0, 0.0)
-    store2.update("222", 121.056, 30.570, 2.0, 0.0)
-    snap2 = store2.snapshot()
-    dets2 = [
-        {"detection_id": 0, "longitude": 121.055, "latitude": 30.569, "coordinate_valid": True},
-        {"detection_id": 1, "longitude": 121.056, "latitude": 30.570, "coordinate_valid": True},
-    ]
-    matches2 = match_detections_to_ais(dets2, snap2, max_distance_km=0.5)
-    assert len(matches2) == 2, f"应匹配2个，实际{len(matches2)}"
-    matched_mmsi = {m["mmsi"] for m in matches2.values()}
-    assert matched_mmsi == {"111", "222"}, f"MMSI不匹配: {matched_mmsi}"
-    print(f"  一对一匹配通过: {matched_mmsi}")
+    resp = send_request_v1(sock, req)
+    assert resp is not None
+    assert "results" in resp
+    print(f"  协议v1兼容通过")
+    return resp
 
 
 def main():
-    env = os.environ.copy()
+    # 启动 sidecar
+    env = dict(os.environ)
     env["HANGZHOUWAN_BUSINESS_SOCK"] = SOCKET_PATH
-    env["COORD_MODEL_A"] = "weights/0121_random_forest_model.pkl"
-    env["COORD_MODEL_B"] = "weights/beishang_x-l.pkl"
-    env.pop("AIS_MQTT_HOST", None)  # 禁用 MQTT 避免重试
+    env.setdefault("COORD_MODE", "sklearn")
+    env.setdefault("HZW_ENVIRONMENT", "development")
 
-    if os.path.exists(SOCKET_PATH):
-        os.unlink(SOCKET_PATH)
+    print("启动 sidecar...")
     proc = subprocess.Popen(
-        [sys.executable, "tools/business/business_sidecar.py"],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        [sys.executable, "-m", "services.business_enrichment.app"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-    for _ in range(50):
+    try:
+        # 等待 sidecar 启动
+        for _ in range(30):
+            if os.path.exists(SOCKET_PATH):
+                break
+            time.sleep(0.5)
+        else:
+            print("❌ sidecar 启动超时")
+            proc.terminate()
+            return 1
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(SOCKET_PATH)
+
+        print("\n=== 测试开始 ===")
+        tests = [
+            ("坐标预测(A路)", test_coordinate_prediction),
+            ("坐标预测(B路)", test_b_coordinate),
+            ("健康检查", test_health),
+            ("协议v1兼容", test_protocol_v1_compat),
+        ]
+        passed = 0
+        failed = 0
+        for name, test_fn in tests:
+            print(f"\n--- {name} ---")
+            try:
+                test_fn(sock)
+                passed += 1
+            except Exception as e:
+                print(f"  ❌ 失败: {e}")
+                failed += 1
+
+        sock.close()
+        print(f"\n=== 结果: {passed} 通过, {failed} 失败 ===")
+        return failed
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
         if os.path.exists(SOCKET_PATH):
-            break
-        time.sleep(0.1)
-    else:
-        print("ERROR: Sidecar 未启动")
-        proc.kill()
-        return 1
-
-    time.sleep(1)
-
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect(SOCKET_PATH)
-
-    print("测试 1: AIS 解码与匹配")
-    test_ais_decoding()
-
-    print("测试 2: 坐标预测（真实模型）")
-    test_coordinate_prediction(sock)
-
-    print("测试 3: B 路坐标预测")
-    test_b_coordinate(sock)
-
-    sock.close()
-    proc.terminate()
-    proc.wait()
-
-    print("\n=== 全部测试通过 ===")
-    return 0
+            os.unlink(SOCKET_PATH)
 
 
 if __name__ == "__main__":

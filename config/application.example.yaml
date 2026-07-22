@@ -68,3 +68,55 @@ runtime:
   reconnect_initial_seconds: 2
   reconnect_max_seconds: 30
   health_check_interval_seconds: 10
+
+# === 阶段4.5 生产候选配置扩展 ===
+
+business:
+  coordinate_mode: sklearn            # sklearn | numpy | mock | off（production禁止mock/off）
+  model_a_path: ""                    # 0121_random_forest_model.pkl 绝对路径
+  model_b_path: ""                    # beishang_x-l.pkl 绝对路径
+  reference_width: 2560
+  reference_height: 1440
+  socket_path: /tmp/hangzhouwan-business.sock
+  request_timeout_ms: 30
+  max_connections: 8
+  enable_evidence_recording: false    # 生产可按需开启
+  ais_max_distance_m:
+    A: 500
+    B: 500
+  ais_max_extrapolation_sec: 120
+
+mqtt:
+  host_env: AIS_MQTT_HOST
+  port: 1883
+  client_id_env: AIS_MQTT_CLIENT_ID
+  username_env: AIS_MQTT_USERNAME
+  password_env: AIS_MQTT_PASSWORD
+  topics: ["upAIS/base_2250", "upAIS/base_2251"]
+  keepalive: 60
+  reconnect_sec: 5
+
+health:
+  check_interval_seconds: 10
+  stream_healthy_fps: 7
+  stream_degraded_fps: 5
+  stream_failed_fps_threshold: 5
+  reconnect_alert_per_hour: 2
+
+logging:
+  video_log_max_size_mb: 50
+  video_log_max_files: 10
+  sidecar_log_max_size_mb: 50
+  sidecar_log_max_files: 10
+  jsonl_max_size_mb: 50
+  jsonl_max_files: 10
+  disk_threshold_mb: 500
+
+deploy:
+  systemd_business_service: deploy/systemd/hangzhouwan-business.service
+  systemd_video_service: deploy/systemd/hangzhouwan-video.service
+  install_script: deploy/install.sh
+  uninstall_script: deploy/uninstall.sh
+  rollback_script: deploy/rollback.sh
+  preflight_script: deploy/preflight.sh
+  # 本阶段不自动 enable systemd 服务

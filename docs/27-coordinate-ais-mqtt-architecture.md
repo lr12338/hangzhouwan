@@ -7,8 +7,8 @@ C++ 视频热路径                         Python 业务 Sidecar
 ┌─────────────────────┐               ┌─────────────────────────┐
 │ SingleStreamPipeline │               │ business_sidecar.py      │
 │  ├─ 检测 + 禁区过滤  │               │  ├─ CoordinatePredictor  │
-│  ├─ BusinessEnrichmentClient ────────>│  │   ├─ A: joblib/模拟  │
-│  │   (Unix Domain Socket)│           │  │   └─ B: joblib/模拟  │
+│  ├─ BusinessEnrichmentClient ────────>│  │   ├─ A: joblib/sklearn  │
+│  │   (Unix Domain Socket)│           │  │   └─ B: joblib/sklearn  │
 │  ├─ BMCV 绘框        │<──────────────│  ├─ AisStore (线程安全)  │
 │  └─ JSONL 输出       │  响应(坐标+匹配)│  ├─ MqttAisSubscriber   │
 └─────────────────────┘               │  │   └─ paho-mqtt        │
@@ -35,7 +35,7 @@ C++ 视频热路径                         Python 业务 Sidecar
 - 预测耗时：A=0.56ms/次 B=0.62ms/次
 - 坐标在杭州湾区域（lon~121.05 lat~30.57）
 - 端到端验证通过：真实坐标与模拟坐标不同（dlon=0.027 dlat=0.016）
-- 备选：numpy 向量化实现（无需 sklearn 运行时，0.56ms/次）
+- 备选：numpy 向量化实现（无需 sklearn 运行时），等价验证待完成
 
 ## MQTT AIS
 
@@ -45,7 +45,7 @@ C++ 视频热路径                         Python 业务 Sidecar
 - Topics: `upAIS/base_2250`, `upAIS/base_2251`
 
 ### AIS 解码
-- 自实现 6-bit ASCII 解码器（无需 pyais 依赖）
+- pyais 生产主路径 + 自研 6-bit 解码后备（pyais 2.4.0 已安装）
 - 支持消息类型：1/2/3（Class A 位置）、4（基站）、18（Class B 位置）
 - 提取字段：MMSI、经度、纬度、速度、航向
 

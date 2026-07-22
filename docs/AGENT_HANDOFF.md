@@ -142,7 +142,7 @@ export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径
 
 3. **业务Sidecar**
    - Python sidecar + Unix Domain Socket + C++ BusinessEnrichmentClient
-   - 坐标预测（sklearn不可用->接口模拟）
+   - 坐标预测（sklearn 1.3.2 真实模型，numpy备选）
    - MQTT AIS订阅（paho-mqtt，连接iot.hifleet.com成功）
    - AIS 6-bit解码器（自实现，支持类型1/2/3/4/18）
    - 视觉-AIS最近邻匹配（haversine距离，一对一）
@@ -167,7 +167,7 @@ export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径
 ### 风险
 
 - B路RTSP每~100秒断连1次（300s内3次），是B路fps偏低的主因
-- sklearn/scipy在板端不可用，坐标预测为接口模拟
+- sklearn 1.3.2+scipy 1.10.1 已在板端安装，坐标真实模型已生效；numpy等价验证和长时门禁待完成
 - AIS缓存测试期间为0（区域内无船或无消息发布）
 
 ### 关键文件

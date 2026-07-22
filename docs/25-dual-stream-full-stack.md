@@ -30,7 +30,7 @@ A/B RTSP -> h264_bm硬解 -> jitter缓冲 -> 墙钟调度(10fps) -> BMCV VPP预�
 
 ### 4. 业务 Sidecar（Python）
 - Unix Domain Socket 批量请求/响应
-- 坐标预测（sklearn 不可用时降级为接口模拟）
+- 坐标预测（sklearn 1.3.2 原生加载真实 A/B 模型，numpy 向量化备选）
 - MQTT AIS 订阅 + AIS 缓存
 - 视觉-AIS 最近邻匹配
 - 超时降级，不阻塞视频路径
@@ -85,7 +85,7 @@ B 路修复前 2.48fps，修复后（jitter buffer）9.05fps。
 - B 路：2特征[x_center,y_center] -> (lon,lat)，100棵树
 - 预测耗时：A=0.56ms/次 B=0.62ms/次（满足30ms超时）
 - 坐标在杭州湾区域（lon~121.05 lat~30.57）
-- 端到端验证：双路60s测试A路280个JSONL事件，坐标与模拟模式不同（确认真实模型生效）
+- 端到端验证：双路60s测试A路280个JSONL事件，坐标与模拟模式不同（确认真实模型生效）；NumpyRandomForest等价验证、真实AIS匹配和长时门禁待完成
 
 ## MQTT/AIS 状态
 

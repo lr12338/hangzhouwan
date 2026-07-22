@@ -1,0 +1,24 @@
+[Unit]
+Description=Hangzhou Bay Video Pipeline Service
+After=hangzhouwan-business.service
+Wants=hangzhouwan-business.service
+
+[Service]
+Type=simple
+User=linaro
+Group=linaro
+WorkingDirectory=/home/linaro/hangzhouwan-orign/hangzhouwan
+EnvironmentFile=/data/hangzhouwan/config/video.env
+ExecStart=/home/linaro/hangzhouwan-orign/hangzhouwan/build/dual_stream_app
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+LimitNOFILE=4096
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
