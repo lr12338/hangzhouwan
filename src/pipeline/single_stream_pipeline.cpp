@@ -562,7 +562,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
             std::vector<BusinessResult> bres;
             bool enrich_ok = business_client_->enrich(
                 cfg.stream_id, vf.sequence, source_w_, source_h_,
-                boxes, bres, 30);
+                boxes, bres, cfg.request_timeout_ms);
             // 融合 Detection + BusinessResult（按 detection_id 索引）
             for (size_t i = 0; i < sd.size(); ++i) {
               const BusinessResult* rp = nullptr;

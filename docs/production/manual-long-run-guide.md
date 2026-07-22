@@ -109,3 +109,92 @@ sudo systemctl stop hangzhouwan.target
 - 降级恢复至少验证 3 次
 - 诊断报告无异常
 - **此级别通过后才可进入 Windows 灰度替换**
+
+---
+
+## 指标采样模板
+
+每 10 分钟执行以下采样并记录：
+
+```bash
+#!/bin/bash
+# 长测指标采样脚本
+TS=$(date '+%Y-%m-%d %H:%M:%S')
+VPID=$(systemctl show hangzhouwan-video.service -p MainPID --value)
+echo "=== $TS ==="
+echo "--- hzwctl health ---"
+/opt/hangzhouwan/current/bin/hzwctl health 2>&1 | grep -E 'status|business_state|rtsp|rtmp|output_fps|inference_fps|rss|reconnect'
+echo "--- process ---"
+echo "video FDs=$(ls /proc/$VPID/fd 2>/dev/null | wc -l) threads=$(grep Threads /proc/$VPID/status 2>/dev/null | awk '{print $2}')"
+echo "video RSS=$(grep VmRSS /proc/$VPID/status 2>/dev/null | awk '{print $2/1024"MB"}')"
+echo "--- systemd ---"
+echo "business NRestarts=$(systemctl show hangzhouwan-business.service -p NRestarts --value)"
+echo "video NRestarts=$(systemctl show hangzhouwan-video.service -p NRestarts --value)"
+echo "--- journal e2e ---"
+journalctl -u hangzhouwan-video.service --no-pager -n 5 2>&1 | grep 'P95' | tail -1
+echo "--- disk ---"
+df -h /opt | tail -1
+echo "--- JSONL count ---"
+wc -l /var/lib/hangzhouwan/stream_A_events.jsonl 2>/dev/null
+```
+
+## 失败停止条件
+
+出现以下任一情况立即停止测试并收集诊断：
+
+1. `dual_stream_app` 进程消失或 core dump
+2. `systemctl is-active` 返回 `failed` 且无法自动恢复
+3. NRestarts 在 10 分钟内增长 >5（重启风暴）
+4. RSS 持续增长且不回落（内存泄漏）
+5. FD 数 >500 或持续增长
+6. 磁盘空间 <200MB
+7. A 路 output_fps 持续 <5fps 超过 5 分钟
+8. RTSP/RTMP 重连频率 >2 次/小时
+9. TPU 内存持续增长
+
+## 测试报告模板
+
+```
+## L<n> 长测报告
+
+- 测试级别：L<n>（<时长>）
+- 开始时间：
+- 结束时间：
+- Release 版本：
+- 配置文件：/etc/hangzhouwan/application.yaml
+
+### 结果
+
+| 指标 | 开始值 | 结束值 | 变化 | 判定 |
+|------|--------|--------|------|------|
+| A output_fps | | | | |
+| A inference_fps | | | | |
+| B output_fps | | | | |
+| RSS (MB) | | | | |
+| FD 数 | | | | |
+| 线程数 | | | | |
+| business NRestarts | | | | |
+| video NRestarts | | | | |
+| RTSP 重连 (A) | | | | |
+| RTMP 重连 (A) | | | | |
+| 磁盘 /opt | | | | |
+
+### 降级恢复验证
+
+- 停止 Business 时间：
+- 恢复 Business 时间：
+- JSONL 恢复 COORD_ONLY 时间：
+- Video 是否中断：
+
+### 异常记录
+
+（无异常 / 描述异常及处理）
+
+### 诊断包
+
+路径：/var/log/hangzhouwan/diagnostics/diag_<timestamp>.txt
+
+### 结论
+
+通过 / 不通过（原因）
+```

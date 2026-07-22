@@ -55,10 +55,21 @@ if [ -d "$RELEASE_DIR/systemd" ]; then
   echo "  systemd 单元已安装（未 enable）"
 fi
 
+# 6. 安装 tmpfiles.d（共享运行目录 /run/hangzhouwan）
+TMPFILES_SRC="$RELEASE_DIR/tmpfiles.d/hangzhouwan.conf"
+if [ ! -f "$TMPFILES_SRC" ]; then
+  TMPFILES_SRC="$(dirname "$RELEASE_DIR")/../deploy/tmpfiles.d/hangzhouwan.conf"
+fi
+if [ -f "$TMPFILES_SRC" ]; then
+  cp "$TMPFILES_SRC" /etc/tmpfiles.d/hangzhouwan.conf
+  systemd-tmpfiles --create /etc/tmpfiles.d/hangzhouwan.conf 2>/dev/null || true
+  echo "  tmpfiles.d 已安装（/run/hangzhouwan 已创建）"
+fi
+
 # 5. 运行预检
 if [ -x "$RELEASE_DIR/bin/hzwctl" ]; then
   echo "=== 执行预检 ==="
-  "$RELEASE_DIR/bin/hzwctl" preflight || {
+  "$RELEASE_DIR/bin/hzwctl" preflight --release "$RELEASE_DIR" --config /etc/hangzhouwan/application.yaml --offline || {
     echo "⚠️  预检未完全通过，请修复后 activate"
   }
 fi

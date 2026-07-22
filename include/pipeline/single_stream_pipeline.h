@@ -63,6 +63,7 @@ struct PipelineConfig {
   bool enable_business = false;          // 启用业务增强（坐标+AIS）
   std::string business_socket = "/tmp/hangzhouwan-business.sock";
   std::string business_jsonl_path;       // 业务JSONL输出路径（空=不输出）
+  int request_timeout_ms = 200;           // Sidecar 请求超时（毫秒）
   std::string coordinate_mode = "sklearn";  // 坐标模式（JSONL/日志用）
   std::string preprocess = "cpu";   // cpu | bmcv
   std::string draw_mode = "cpu";    // cpu | bmcv | none

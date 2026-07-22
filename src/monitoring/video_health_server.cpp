@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <chrono>

@@ -59,10 +59,15 @@ for m in "0121_random_forest_model.pkl" "beishang_x-l.pkl"; do
 done
 
 # 5. 复制 systemd / config / services
-echo "[5/7] 复制 systemd / config / services..."
+echo "[5/7] 复制 systemd / config / services / tmpfiles.d..."
 cp "$REPO_ROOT"/deploy/systemd/*.service "$RELEASE_DIR/systemd/" 2>/dev/null || true
 cp "$REPO_ROOT"/deploy/systemd/*.target "$RELEASE_DIR/systemd/" 2>/dev/null || true
 cp "$REPO_ROOT/config/application.example.yaml" "$RELEASE_DIR/config/"
+# tmpfiles.d：共享运行目录 /run/hangzhouwan 由 tmpfiles.d 统一管理
+if [ -f "$REPO_ROOT/deploy/tmpfiles.d/hangzhouwan.conf" ]; then
+  mkdir -p "$RELEASE_DIR/tmpfiles.d"
+  cp "$REPO_ROOT/deploy/tmpfiles.d/hangzhouwan.conf" "$RELEASE_DIR/tmpfiles.d/"
+fi
 cp -r "$REPO_ROOT/services" "$RELEASE_DIR/"
 find "$RELEASE_DIR/services" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
@@ -73,11 +78,20 @@ if [ -d "/data/hangzhouwan/venv" ]; then
   echo "  复用 /data/hangzhouwan/venv"
   ln -sf /data/hangzhouwan/venv "$RELEASE_DIR/venv"
 else
-  # 创建最小 venv
-  python3 -m venv "$RELEASE_DIR/venv" 2>/dev/null || true
-  if [ -f "$REPO_ROOT/services/business_enrichment/requirements.lock" ]; then
-    "$RELEASE_DIR/venv/bin/pip" install -r "$REPO_ROOT/services/business_enrichment/requirements.lock" -q 2>/dev/null || \
-      echo "  警告: venv pip install 失败，请手动安装依赖"
+  # 本板 ensurepip 不可用且 sklearn/scipy/joblib/pyais/paho 位于用户 site，
+  # 使用 --system-site-packages --without-pip 创建 venv，并通过 .pth 继承用户 site。
+  python3 -m venv --system-site-packages --without-pip "$RELEASE_DIR/venv" 2>/dev/null || true
+  if [ -x "$RELEASE_DIR/venv/bin/python3" ]; then
+    PYVER="$("$RELEASE_DIR/venv/bin/python3" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)"
+    SP_DIR="$RELEASE_DIR/venv/lib/python${PYVER}/site-packages"
+    USER_LOCAL="$HOME/.local/lib/python${PYVER}/site-packages"
+    mkdir -p "$SP_DIR" 2>/dev/null || true
+    if [ -n "$USER_LOCAL" ] && [ -d "$USER_LOCAL" ]; then
+      echo "$USER_LOCAL" > "$SP_DIR/userlocal.pth"
+    fi
+    "$RELEASE_DIR/venv/bin/python3" -c "import sklearn,scipy,joblib,numpy,pyais,paho.mqtt.client" 2>/dev/null \
+      && echo "  venv 依赖 OK (继承系统+用户 site)" \
+      || echo "  警告: venv 依赖不完整，请手动安装 sklearn/scipy/joblib/pyais/paho"
   fi
 fi
 

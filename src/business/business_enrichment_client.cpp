@@ -127,7 +127,7 @@ bool BusinessEnrichmentClient::connect(const std::string& socket_path) {
   }
   fcntl(fd_, F_SETFL, flags);  // 恢复阻塞模式
   // 设置发送/接收超时
-  struct timeval tv{0, 30000};  // 30ms
+  struct timeval tv{0, 200000};  // 200ms（初始默认，enrich 会覆盖）
   setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
   return true;

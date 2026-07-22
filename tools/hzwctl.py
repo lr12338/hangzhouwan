@@ -30,6 +30,14 @@ try:
 except ImportError:
     yaml = None
 
+# 确保 sophon 工具（ffmpeg/bm-smi）在 PATH 中（sudo 环境可能不含用户 PATH）
+for _sbin in ("/opt/sophon/sophon-ffmpeg-latest/bin",
+              "/opt/sophon/sophon-ffmpeg_0.8.0/bin",
+              "/opt/sophon/libsophon-current/bin",
+              "/opt/sophon/libsophon-0.4.9/bin"):
+    if os.path.isdir(_sbin) and _sbin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _sbin + os.pathsep + os.environ.get("PATH", "")
+
 BASE_DIR = "/opt/hangzhouwan"
 CURRENT_LINK = os.path.join(BASE_DIR, "current")
 PREVIOUS_LINK = os.path.join(BASE_DIR, "previous")
@@ -330,6 +338,9 @@ def _check_config_consistency(config_path, result):
                      set(ais["topics"]) == set(mqtt["topics"]),
                      f"ais={ais['topics']} mqtt={mqtt['topics']}")
 
+    # 灰度输出与 Windows 正式推流地址冲突检查
+    _check_grayscale_conflict(doc, result)
+
 
 def _check_release_files(release_path, result):
     """检查 release 目录关键文件。"""
@@ -359,6 +370,84 @@ def _check_release_files(release_path, result):
     # hzwctl 可执行
     hzwctl_path = os.path.join(release_path, "bin/hzwctl")
     result.check("hzwctl 可执行", os.path.isfile(hzwctl_path) and os.access(hzwctl_path, os.X_OK))
+
+
+def _load_env_files():
+    """从 /etc/hangzhouwan/{video,business}.env 加载 KEY=VALUE（跳过注释）。"""
+    env = {}
+    for name in ("video.env", "business.env"):
+        path = os.path.join("/etc/hangzhouwan", name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    env[k.strip()] = v.strip()
+        except Exception:
+            pass
+    return env
+
+
+def _resolve_env_value(env_name, env_files):
+    """优先进程环境，其次 .env 文件。"""
+    val = os.environ.get(env_name)
+    if val:
+        return val
+    return env_files.get(env_name, "")
+
+
+def _check_dynamic_libs(release_path, result):
+    """检查 dual_stream_app 动态库依赖，存在 not found 则预检失败。"""
+    app = os.path.join(release_path, "bin/dual_stream_app")
+    if not os.path.isfile(app):
+        return
+    rc, out, _ = run(f"ldd '{app}' 2>&1", timeout=10)
+    not_found = [ln.strip() for ln in out.splitlines() if "not found" in ln]
+    result.check("动态库无 not found", not not_found,
+                 "; ".join(not_found[:3]) if not_found else "ldd OK")
+
+
+def _check_grayscale_conflict(doc, result):
+    """灰度输出不得与 Windows 正式推流地址冲突。
+
+    application.yaml 的 deploy.forbidden_formal_outputs 列出正式输出地址；
+    每路启用流的 output_url（由 output_url_env 解析）不得命中其中任一。
+    """
+    deploy = doc.get("deploy", {}) or {}
+    forbidden = deploy.get("forbidden_formal_outputs", []) or []
+    if not forbidden:
+        result.check("灰度/正式输出冲突检查", True, "未配置 forbidden_formal_outputs（跳过）")
+        return
+    env_files = _load_env_files()
+    streams = doc.get("streams", []) or []
+    conflict = None
+    checked = 0
+    for st in streams:
+        if not st.get("enabled"):
+            continue
+        out_env = st.get("output_url_env", "")
+        if not out_env:
+            continue
+        out_url = _resolve_env_value(out_env, env_files)
+        if not out_url:
+            continue
+        checked += 1
+        for furl in forbidden:
+            if furl and (out_url == furl or out_url.rstrip("/") == furl.rstrip("/")):
+                conflict = (st.get("id", "?"), out_url)
+                break
+        if conflict:
+            break
+    if conflict:
+        result.check("灰度/正式输出不冲突", False, f"流 {conflict[0]} 命中正式地址")
+    elif checked == 0:
+        result.check("灰度/正式输出不冲突", True, "未解析到输出地址（环境变量未注入）")
+    else:
+        result.check("灰度/正式输出不冲突", True, f"{checked} 路灰度地址均未冲突")
 
 
 def cmd_preflight(args):
@@ -403,6 +492,7 @@ def cmd_preflight(args):
         print("--- 离线静态检查 ---")
         _check_release_files(release_path, result)
         _verify_manifest_shas(release_path, result)
+        _check_dynamic_libs(release_path, result)
         _check_ffmpeg(result)
         _check_config_consistency(config_path, result)
 
@@ -467,20 +557,51 @@ def cmd_preflight(args):
             with open(check_path) as f:
                 content = f.read()
             result.check("business ExecStart 含 --config", "--config" in content)
-            result.check("business 含 RuntimeDirectory", "RuntimeDirectory=hangzhouwan" in content)
+            result.check("business 无 RuntimeDirectory", "RuntimeDirectory" not in content)
         else:
             result.check("business systemd 单元", False, "未找到")
+
+        # tmpfiles.d 统一管理共享运行目录 /run/hangzhouwan
+        tmpfiles_installed = "/etc/tmpfiles.d/hangzhouwan.conf"
+        tmpfiles_release = os.path.join(release_path, "tmpfiles.d/hangzhouwan.conf")
+        tmpfiles_path = tmpfiles_installed if os.path.isfile(tmpfiles_installed) else tmpfiles_release
+        if os.path.isfile(tmpfiles_path):
+            try:
+                with open(tmpfiles_path) as f:
+                    tf = f.read()
+            except Exception:
+                tf = ""
+            result.check("tmpfiles.d 管理 /run/hangzhouwan", "/run/hangzhouwan" in tf, tmpfiles_path)
+        else:
+            result.check("tmpfiles.d 管理 /run/hangzhouwan", False, "缺失")
         print()
 
     if do_runtime:
         print("--- 运行时冲突检查 ---")
-        # 残留进程
-        rc, out, _ = run("pgrep -f 'dual_stream_app' 2>/dev/null", timeout=3)
-        result.check("无残留 dual_stream_app", rc != 0,
-                     f"PID={out}" if rc == 0 else "")
-        rc, out, _ = run("pgrep -f 'business_enrichment.app' 2>/dev/null", timeout=3)
-        result.check("无残留 business 进程", rc != 0,
-                     f"PID={out}" if rc == 0 else "")
+        # 残留进程：直接扫描 /proc，排除自身进程树避免自匹配
+        my_pid = os.getpid()
+        my_ppid = os.getppid()
+        residual_app = []
+        residual_biz = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid in (my_pid, my_ppid):
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as cf:
+                    cmdline = cf.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+            except (IOError, OSError):
+                continue
+            if "dual_stream_app" in cmdline and "pgrep" not in cmdline and "hzwctl" not in cmdline:
+                residual_app.append(pid)
+            if "business_enrichment.app" in cmdline and "pgrep" not in cmdline and "hzwctl" not in cmdline:
+                residual_biz.append(pid)
+        result.check("无残留 dual_stream_app", not residual_app,
+                     f"PID={','.join(map(str, residual_app))}" if residual_app else "")
+        result.check("无残留 business 进程", not residual_biz,
+                     f"PID={','.join(map(str, residual_biz))}" if residual_biz else "")
 
         # systemd 重启风暴检查
         for svc in [BUSINESS_SVC, VIDEO_SVC]:

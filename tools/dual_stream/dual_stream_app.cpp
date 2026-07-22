@@ -95,6 +95,7 @@ hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
   pc.enable_business = enable_business;
   pc.business_socket = business_socket;
   pc.business_jsonl_path = enable_business ? jsonl_path : "";
+  pc.request_timeout_ms = app_cfg.request_timeout_ms;
 
   if (!no_region_filter && (!sc.forbidden_rectangles.empty() || !sc.forbidden_polygons.empty())) {
     pc.enable_region_filter = true;

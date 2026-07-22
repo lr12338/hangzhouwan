@@ -45,6 +45,11 @@ set_target_properties(sophon_ffmpeg PROPERTIES
   INTERFACE_LINK_DIRECTORIES "${SOPHON_FFMPEG_LIB}")
 target_link_libraries(sophon_ffmpeg INTERFACE avformat avcodec swscale avutil)
 
+# 嵌入运行时库搜索路径（RPATH），Release 复制 build 二进制后无需依赖 LD_LIBRARY_PATH。
+# 同时 video.env 仍保留 LD_LIBRARY_PATH 作为兜底。
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH "/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib")
+
 # 推理/图像/视频/管线/指标静态库
 add_library(hzw_inf STATIC
   src/inference/bmrt_detector.cpp

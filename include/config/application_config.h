@@ -94,7 +94,7 @@ struct ApplicationConfig {
   int reference_width = 2560;
   int reference_height = 1440;
   std::string business_socket = "/run/hangzhouwan/business.sock";
-  int request_timeout_ms = 30;
+  int request_timeout_ms = 200;
   int max_connections = 8;
   bool enable_evidence_recording = false;
   int ais_max_distance_m_a = 500;

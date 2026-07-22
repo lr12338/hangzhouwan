@@ -47,6 +47,7 @@ BASE_DIR="/opt/hangzhouwan"
 CURRENT_LINK="$BASE_DIR/current"
 PREVIOUS_LINK="$BASE_DIR/previous"
 HZWCTL="${RELEASE_DIR}/bin/hzwctl"
+TARGET_SVC="hangzhouwan.target"
 RESULT_CODE=0
 
 echo "=== 激活 Release: ${RELEASE_DIR} ==="
@@ -199,8 +200,11 @@ if [ $RESULT_CODE -ne 0 ]; then
     ln -sfn "$PREV_TARGET" "$CURRENT_LINK"
     echo "  current -> $PREV_TARGET"
 
-    # 重启 previous
+    # 重启 previous（先 reset-failed 清除 StartLimitBurst）
     echo "  重启 previous..."
+    sudo systemctl reset-failed "$TARGET_SVC" 2>/dev/null || true
+    sudo systemctl reset-failed hangzhouwan-business.service 2>/dev/null || true
+    sudo systemctl reset-failed hangzhouwan-video.service 2>/dev/null || true
     sudo systemctl restart "$TARGET_SVC" 2>/dev/null || true
 
     # 验证 previous readiness

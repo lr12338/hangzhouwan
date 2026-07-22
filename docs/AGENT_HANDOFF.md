@@ -1,212 +1,84 @@
 # Agent 接手提示（AGENT_HANDOFF）
 
-## 当前状态：2026-07-21
+## 当前状态：2026-07-22 阶段7板端实装验证完成
 
-项目根目录为 `/home/linaro/hangzhouwan-orign/hangzhouwan`，分支为 `feat/bm1684-edge-deployment`。目标芯片固定为 BM1684（`chipid=0x1684`），已完成 F32 bmodel 板端验证、单图 C++ 推理 PoC、阶段4 单路硬件视频管线功能与 BMCV 性能优化。
-短时 300s 验证通过（10fps）；30min/2h 长时门禁待人工执行。阶段4.2 单路 RTSP 输入代码+单元测试+连接路径验证完成，实流/长时待人工。
-
-## 已完成
-
-### 阶段2：F32 bmodel 转换与 x86 验证
-- F32 bmodel 已生成：`artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`（24,428,544 字节）
-- Git 提交 `9255f27`（bmodel 已跟踪，`git ls-files` 确认）
-- SHA256：`d1c295c504888541c27e20fda500976725b9d13b6ef5c91842f247f52c31cfcd`
-- ONNX/MLIR 172 个 Tensor 数值验证通过；bmodel cmodel 比较通过
-
-### 阶段2B：板端 bmodel 真实加载
-- `bmrt_test` 加载成功（退出码 0）
-- `bmrt_load_test` 编译运行成功（退出码 0）
-- 网络 `yolov7_ship`：输入 `images [1,3,640,640] FLOAT32`，输出 `output_Concat [1,25200,6] FLOAT32`
-- 输出名动态读取（非硬编码 `output`）
-- 无兼容性错误，TPU 资源正常释放
-
-### 阶段3：单图 C++ 推理 PoC
-- 代码结构：`include/inference/` + `src/inference/` + `include/image_io/` + `src/image_io/`
-- 预处理：libjpeg 解码(RGB) → 直接 resize 640×640 → /255 → NCHW FLOAT32（与 Python 一致）
-- 后处理：obj_conf 过滤 → score 过滤 → 坐标映射 → NMS（与 detector.py 一致）
-- 单元测试：10 项全部通过
-- 单图推理：frame_30.jpg 检测到 2 艘船（预处理 56ms，推理 16ms，后处理 0.6ms）
-- 100 次重复推理：平均 15.99ms，框数稳定，无内存泄漏
-- Python 测试：26 项全部通过
-
-## 构建
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j4
-ctest --test-dir build --output-on-failure
-
-# 单图推理
-LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
-  ./build/single_image_infer \
-  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
-  --image testdata/model_test/frame_30.jpg \
-  --output result.jpg --json result.json \
-  --conf 0.1 --iou 0.1 --device 0
-
-# 100 次重复推理
-LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
-  ./build/single_image_infer \
-  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
-  --image testdata/model_test/frame_30.jpg \
-  --conf 0.1 --iou 0.1 --device 0 --loop 100
-```
-
-## 精度声明
-
-板端 F32 单图推理、后处理和绘框功能已通过。**最终检测框精度仍需与同图 ONNX 基线 JSON 对照**。当前无 x86 基线 JSON。
-
-## 阶段4：单路硬件视频管线（🔶 功能通过+300s验证通过，30min/2h 待人工执行）
-
-```bash
-LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib \
-  ./build/single_video_infer \
-  --input testdata/test.mp4 \
-  --output artifacts/stage4/output_single_stream.mp4 \
-  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
-  --device 0 --decoder h264_bm --encoder h264_bm \
-  --output-fps 10 --inference-fps 5 --queue-size 1 --loop 1 \
-  --preprocess cpu --draw-mode bmcv
-```
-
-推荐配置 `--preprocess cpu --draw-mode bmcv`：CPU 预处理保证检测正确性，BMCV 绘制消除 sws 往返瓶颈（132ms -> 6ms/帧），输出达 10fps。
-
-稳定性测试：
-```bash
-./tools/video_inference/stability_test.sh 10   # 10 秒功能
-./tools/video_inference/stability_test.sh 60   # 60 秒性能
-./tools/video_inference/stability_test.sh 300  # 300 秒短时稳定性
-./tools/video_inference/stability_test.sh 30   # 30 分钟（人工）
-./tools/video_inference/stability_test.sh 120  # 2 小时（人工）
-```
-
-稳定性测试结果：
-- 10s 功能 ✅ 通过（CPU+CPU / BMCV+BMCV / BMCV+none 三模式）
-- 60s 性能 ✅ 通过（CPU+BMCV 10.02fps / BMCV+BMCV 10.03fps）
-- 300s 短时稳定性 ✅ 通过（10.003fps，退出码 0，RSS +356KB，P95=150ms 稳定，无残留）
-- 30min 中等 ⏳ 待人工执行（详见 `docs/20-stage4-manual-long-run-guide.md`）
-- 2h 最终门禁 ⏳ 待人工执行
-
-## 阶段4.2：单路 RTSP 输入到本地文件（🔶 代码+单测+连接路径验证通过，实流/长时待人工）
-
-扩展 `SophonVideoSource` 支持 RTSP：`open_rtsp`（`rtsp_transport`+`stimeout` 经 AVDictionary，参数来自板端 `ffmpeg -h demuxer=rtsp` 实测）、中断回调（`stop_requested_` 使 open/read 可被信号/限时中断）、`read()` 内受控重连（指数退避，封顶，受 `--rtsp-max-reconnect` 约束）。
-
-安全：`--input-env HZW_TEST_RTSP_URL` 环境变量输入（URL 不入命令行/日志/Git）；`redact_url_credentials` 脱敏（`rtsp://user:***@host`）；提交前 `python3 tools/redact_secrets.py --scan .`。
-
-```bash
-export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径'   # 板端私下设置，勿写入文件
-./build/single_video_infer \
-  --source-type rtsp --input-env HZW_TEST_RTSP_URL \
-  --output artifacts/stage4_2/rtsp_60s.mp4 \
-  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
-  --device 0 --decoder h264_bm --encoder h264_bm \
-  --rtsp-transport tcp --rtsp-stimeout-us 5000000 --rtsp-max-reconnect -1 \
-  --source-fps 20 --output-fps 10 --inference-fps 5 --queue-size 1 \
-  --preprocess cpu --draw-mode bmcv --max-seconds 60
-```
-
-验证状态：
-- `ctest` 8 项 + Python 29 项全通过（新增 `test_rtsp_source_options`、`test_output_pts`、`redact_secrets --scan`）。
-- 20s 本地文件回归通过（硬件链路未回退）。
-- 受控无效地址验证：连接超时（`stimeout`）、SIGTERM/SIGINT 中断阻塞（`Immediate exit requested`）、凭据不泄漏、无残留。
-- 待人工：RTSP 实流解码、中途断线重连、30min/2h 门禁（见 `docs/21`、`docs/22`）。
-
-限制：板端 Sophon-FFmpeg RTSP muxer 不支持 listen，无可用 RTSP 服务端工具，无法自建本地中继自测。
-
-## 待完成
-
-- 与 x86 ONNX 基线 JSON 进行精度对照
-- 阶段4：30min/2h 长时稳定性门禁人工执行（详见 `docs/20`）
-- 阶段4.2：RTSP 实流解码 + 中途断线重连 + 30min/2h 门禁人工执行（详见 `docs/22`）
-- 后续：INT8 量化、AIS 坐标映射、双路 Pipeline、部署
-
-## 执行红线（始终遵守）
-
-禁止：安装 TPU-MLIR、Python SAIL、Torch/CUDA、修改 libsophon、INT8 转换、连接生产 RTSP/MQTT/RTMP/启动双路/INT8、修改 systemd、硬编码输出名为 `output`、伪造测试结果。
+项目根目录：`/home/linaro/hangzhouwan-orign/hangzhouwan`
+仓库：`https://github.com/lr12338/hangzhouwan`
+分支：`feat/bm1684-edge-deployment`
+当前 Release：`202607221953-3dfcf4e`（`/opt/hangzhouwan/current`）
+平台：BM1684-SOC（chipid `0x1684`，非 BM1684X），libsophon 0.4.9，sophon-ffmpeg 0.8.0
 
 ---
 
-## 2026-07-22 阶段4.4 交接
+## 已完成
 
-### 本次完成
+- **阶段7板端编译**：C++ 全量编译通过（修复 `video_health_server.cpp` 缺少 `<sys/stat.h>`）
+- **systemd 实装**：Business/Video 单元已安装到 `/etc/systemd/system/`（未 enable），`systemd-analyze verify` 通过
+- **Wants 替代 Requires**：Video 用 `Wants=hangzhouwan-business.service`，停止 Business 不连带停止 Video
+- **tmpfiles.d**：`/run/hangzhouwan` 由 tmpfiles.d 统一管理，重启任一服务不删除另一方的 Socket
+- **T1-T10 短测全部通过**：详见 `docs/production/stage7-validation-guide.md`
+- **Release 激活/回滚**：原子切换 + 自动回滚 + 60s smoke 验证通过
+- **RUNPATH**：二进制嵌入 sophon 库路径，无需 LD_LIBRARY_PATH
+- **request_timeout_ms**：从硬编码 30ms 改为配置驱动（默认 200ms），修复 Sidecar 超时
+- **Python 测试 93 项通过**，CTest 13/13 通过
 
-1. **B路吞吐诊断与修复**
-   - 根因：B路RTSP突发到达 + 墙钟调度仅输出1帧/突发
-   - 修复：capture_loop线程 + 5帧抖动缓冲，B路从2.48fps提升至9.05fps
-   - 修复：sink output_frames() PTS重置导致计数不准的bug
+## 配置位置
 
-2. **双路并发架构**
-   - DualStreamApplication：A/B同时启动，独立RTSP/RTMP/推理/编码
-   - per_stream模式：A/B各加载一份bmodel，并发推理
-   - BmrtDetector张量预分配（减少alloc/free开销）
+| 文件 | 路径 | 说明 |
+|---|---|---|
+| 配置 | `/etc/hangzhouwan/application.yaml` | 唯一权威配置（640 root:linaro） |
+| Business env | `/etc/hangzhouwan/business.env` | MQTT 凭据等（640） |
+| Video env | `/etc/hangzhouwan/video.env` | RTSP/RTMP URL 等（640） |
 
-3. **业务Sidecar**
-   - Python sidecar + Unix Domain Socket + C++ BusinessEnrichmentClient
-   - 坐标预测（sklearn 1.3.2 真实模型，numpy备选）
-   - MQTT AIS订阅（paho-mqtt，连接iot.hifleet.com成功）
-   - AIS 6-bit解码器（自实现，支持类型1/2/3/4/18）
-   - 视觉-AIS最近邻匹配（haversine距离，一对一）
-   - 30ms超时降级，不阻塞视频路径
+> 三个文件均不提交 Git，含真实凭据。
 
-4. **分段指标增强**
-   - 新增15+计数器和11个耗时分段
-   - 日志带stream_id=[A]/[B]前缀
+## 服务名称
 
-5. **测试结果**
-   - T0 B路60s：9.05fps（修复后）
-   - T1 双路纯视频60s：A=9.62fps B=7.92fps
-   - T2 双路+业务60s：A=9.52fps B=7.78fps（<2%开销）
-   - T5 全链路300s：A=9.90fps B=5.91fps，1976 JSONL事件，退出码0
+- `hangzhouwan.target`
+- `hangzhouwan-business.service`
+- `hangzhouwan-video.service`
 
-### 待人工执行
+## Socket 位置
 
-- 30分钟和2小时长时稳定性测试
-- 真实AIS数据验证（需有船经过时）
-- 坐标真实模型验证（需x86导出sklearn模型为JSON）
+- `/run/hangzhouwan/business.sock`（Business Sidecar）
+- `/run/hangzhouwan/video-health.sock`（Video 结构化健康接口）
 
-### 风险
+## 当前生产门禁
 
-- B路RTSP每~100秒断连1次（300s内3次），是B路fps偏低的主因
-- sklearn 1.3.2+scipy 1.10.1 已在板端安装，坐标真实模型已生效；numpy等价验证和长时门禁待完成
-- AIS缓存测试期间为0（区域内无船或无消息发布）
+- T1-T10 短测全部通过
+- 300 秒灰度全链路通过（A 路 10fps/5fps 稳定，0 重连，无泄漏）
+- **未通过**：L1-L4 长测、真实 AIS 人工样本、Windows 回切演练、systemd enable
 
-### 关键文件
+## 已知风险
 
-- `include/application/dual_stream_application.h`
-- `src/application/dual_stream_application.cpp`
-- `tools/dual_stream/dual_stream_app.cpp`
-- `tools/dual_stream/dual_full_stack_stability.sh`
-- `tools/business/business_sidecar.py`
-- `include/business/business_enrichment_client.h`
-- `src/business/business_enrichment_client.cpp`
-- `docs/25-dual-stream-full-stack.md`
-- `docs/26-dual-stream-manual-long-run.md`
-- `docs/27-coordinate-ais-mqtt-architecture.md`
+- **B 路摄像头返回 400 Bad Request**：非代码问题，摄像头端问题，B 路无法连接
+- **AIS 缓存为 0**：测试期间无船经过，需有船时采集真实 AIS 样本
+- **e2e P95 在健康接口中报告为 0**：journal 中有实际值（~356ms），健康接口采样逻辑待优化
+- **TPU info 在健康接口中为 unknown**：bm-smi 集成待完善
+- **磁盘 /opt 仅 1.7G 可用**：需监控 Release 累积
 
-### 2026-07-22 坐标真实模型 + MQTT AIS 验证
+## B 路 RTSP 状态
 
-#### 坐标真实模型验证
+- B 路 RTSP URL：`rtsp://admin:***@112.16.184.176:48554/streaming/Channels/301`
+- 状态：摄像头返回 400 Bad Request，无法连接
+- 原因：摄像头端配置或固件问题，非 BM1684 代码问题
 
-- 安装 sklearn 1.3.2 + scipy 1.10.1（`pip3 install scikit-learn==1.3.2`）
-- A/B 模型通过 `joblib.load` 原生加载成功（100棵树各）
-- A 路：4特征 [x1,y1,x2,y2] -> (lon,lat)，预测 0.56ms/次
-- B 路：2特征 [x_center,y_center] -> (lon,lat)，预测 0.62ms/次
-- 坐标在杭州湾区域（lon~121.05, lat~30.57）
-- 端到端验证：双路60s测试A路280个JSONL事件，真实坐标与模拟坐标不同（确认真实模型生效）
-- Sidecar 同时支持 sklearn 原生模式和 numpy 向量化备选模式
+## 下一步人工测试
 
-#### MQTT AIS 端到端验证
+1. **L1 30分钟长测**：`docs/production/manual-long-run-guide.md`
+2. **L2 2小时长测**
+3. **L3 8小时长测**
+4. **L4 24小时长测**（通过后才可 enable）
+5. **真实 AIS A/B 各 20 个人工样本**：需有船经过时采集
+6. **Windows 回切演练**：停止 systemd 服务后确认 Windows 可正常接管
+7. **systemd enable**：L4 + 回切演练通过后
+8. **正式 RTMP 切换**：灰度对比 24h 后逐路切换
 
-- MQTT 连接 iot.hifleet.com:1883 成功，订阅 upAIS/base_2250, upAIS/base_2251
-- AIS 6-bit 解码器验证通过（类型 1/2/3/4/18 均正确解码）
-- MQTT 端到端验证：发布测试AIS消息 -> sidecar接收 -> 解析 -> 缓存 -> 匹配成功
-  - 检测框坐标 (121.0548, 30.5688) 匹配 AIS 船 (121.054, 30.569)，距离 0.084km
-  - MMSI=412000001, speed=5.0, course=180.0
-- 一对一匹配验证通过（两个检测框匹配两个不同MMSI）
-- 实际运行期间 AIS 缓存为 0（区域内当前无船经过）
+## 禁止事项
 
-#### 双路60s真实模型测试
-
-- A 路：571帧输出（9.52fps），284次推理（4.73fps），280个JSONL事件
-- B 路：因摄像头返回 400 Bad Request 未连接成功（非代码问题）
-- 业务增强处理耗时 ~15ms/帧（含坐标预测+AIS匹配），不阻塞视频路径
+- ❌ 不自动 `systemctl enable`（需 L4 + 回切演练通过）
+- ❌ 不关闭 Windows 旧服务
+- ❌ 不覆盖 Windows 正式 RTMP 地址（灰度使用 `_bm1684` 后缀 Key）
+- ❌ 不自动执行超过 300 秒的测试
+- ❌ 不提交 `/etc/hangzhouwan/` 真实配置和凭据
+- ❌ 不提交测试日志、诊断包、JSONL、输出视频

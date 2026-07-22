@@ -204,3 +204,91 @@
 | 真实MQTT消息 | MQTT连接订阅通过，有真实AIS消息 |
 | 真实AIS样本 | A/B各≥20样本，坐标非0，匹配率达标 |
 | Windows回切 | 停止systemd服务后Windows可正常接管 |
+
+---
+
+## 6. 阶段7：板端实装验证（2026-07-22，本次完成）
+
+### 当前 HEAD
+
+`3dfcf4e6ef630f1eb6e27368143283a42512cfcc`（阶段7生产实装收口基线）
+
+### 板端编译结果
+
+- 修复 `video_health_server.cpp` 缺少 `#include <sys/stat.h>`（`::mkdir`）
+- C++ 全量编译通过：dual_stream_app + single_video_infer + 所有测试目标
+- CMake 设置 `CMAKE_INSTALL_RPATH` 嵌入 sophon 库路径
+- `ldd` 无 not found；`dual_stream_app` 无需 LD_LIBRARY_PATH 即可运行
+
+### CTest 结果
+
+13/13 通过（含 bmcv_processor 硬件测试、stability_script 30s）
+> 注意：ctest 3.16.3 不支持 `--test-dir`，需 `cd build && ctest`
+
+### Python 测试
+
+93 项全部通过（skipped=2）
+
+### T1-T10 逐项结果
+
+| 测试 | 结果 | 关键指标 |
+|------|------|----------|
+| T1 Business独立启动 | ✅ | sklearn模式, 模型加载, MQTT连接, socket建立 |
+| T2 Video readiness | ✅ | wait-business 30s超时, 无残留进程, 恢复后成功 |
+| T3 双服务启动 | ✅ | 双active, 双Socket, 结构化状态 |
+| T4 Video健康接口 | ✅ | health/metrics/version合法JSON, A路10fps/5fps |
+| T5 重启Video | ✅ | business.sock不丢失, Business不重启, PID不变 |
+| T6 Business停止恢复 | ✅ | Video继续推流, JSONL降级恢复, 无FD/线程泄漏 |
+| T7 Release激活 | ✅ | verify+preflight+原子切换+60s smoke, exit 0 |
+| T8 错误Release回滚 | ✅ | T8a预检拒绝, T8b自动回滚到previous |
+| T9 Sidecar异常恢复 | ✅ | systemd自动拉起, Video不中断, enrichment恢复 |
+| T10 300秒灰度全链路 | ✅ | A路10fps/5fps稳定, e2eP95=356ms, 0重连, 无泄漏 |
+
+### Release 路径和版本
+
+- 当前 Release：`/opt/hangzhouwan/releases/202607221953-3dfcf4e`
+- previous：`/opt/hangzhouwan/releases/202607221948-3dfcf4e`
+
+### systemd 实装状态
+
+- 单元已安装到 `/etc/systemd/system/`（未 enable）
+- `systemd-analyze verify` 通过
+- Wants 替代 Requires（停止 Business 不连带停止 Video）
+- tmpfiles.d 管理 `/run/hangzhouwan`（重启任一服务不删除另一方 Socket）
+
+### 300秒灰度结果
+
+- A 路：output=10.0fps, inference=5.0fps, e2e P95=356ms, RSS=26.1MB 稳定, FD=203 稳定, 线程=10 稳定
+- B 路：disconnected（摄像头返回 400 Bad Request，非代码问题）
+- MQTT：connected, AIS 缓存=0（无船经过）
+- JSONL：2752 事件，全 COORD_ONLY
+- systemd 重启：business=1（T9 kill 测试）, video=0
+- 灰度 RTMP：使用 `_bm1684` 后缀 Key，不覆盖 Windows 正式流
+
+### 降级恢复结果
+
+- 停止 Business -> Video 降级 DETECTION_ONLY -> JSONL 无坐标 -> 恢复 Business -> JSONL COORD_ONLY 恢复
+- FD 203->202->203（无泄漏），线程 10 不变，fps 6.39->9.99 恢复
+
+### 激活/回滚结果
+
+- T7 激活成功（原子切换 + 60s smoke）
+- T8a 预检拒绝（manifest SHA 破坏）
+- T8b 自动回滚（broken binary -> wait-video 失败 -> current 切回 previous）
+
+### 当前仍未完成
+
+- L1 30分钟 / L2 2小时 / L3 8小时 / L4 24小时 长测（待人工）
+- 真实 AIS A/B 各 20 个人工样本（待人工）
+- Windows 回切演练（待人工）
+- systemd enable（L4 + 回切演练通过后）
+- 正式 RTMP 切换（灰度对比 24h 后）
+
+### Windows 仍在运行
+
+- Windows 旧服务继续运行，BM1684 使用灰度 RTMP 地址（`_bm1684` 后缀 Key）
+- 不覆盖 Windows 正式推流地址
+
+### systemd 是否仍未 enable
+
+- 是，未 enable。需 L4 24 小时长测 + Windows 回切演练通过后才允许 enable。

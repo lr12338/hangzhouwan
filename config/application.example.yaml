@@ -84,7 +84,7 @@ business:
   reference_width: 2560
   reference_height: 1440
   socket_path: /run/hangzhouwan/business.sock
-  request_timeout_ms: 30
+  request_timeout_ms: 200
   max_connections: 8
   enable_evidence_recording: false    # 生产可按需开启
   ais_max_distance_m:
@@ -125,4 +125,7 @@ deploy:
   uninstall_script: deploy/uninstall.sh
   rollback_script: deploy/rollback.sh
   preflight_script: deploy/preflight.sh
+  # 灰度安全：Windows 旧服务正在使用的正式 RTMP 推流地址，BM1684 灰度输出不得命中。
+  # preflight 会解析各启用流 output_url_env 的真实值并校验不在此列表内。
+  forbidden_formal_outputs: []
   # 本阶段不自动 enable systemd 服务

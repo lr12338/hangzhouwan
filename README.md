@@ -24,8 +24,8 @@
 | 4.2 | 单路 RTSP 输入到本地文件 | 🔶 | 代码+单元测试+连接路径验证通过；实流/长时待人工 |
 | 5 | 坐标映射 + AIS 迁移 | ⏳ | 关联不低于旧版 |
 | 6 | 双路 Pipeline 整合 | ⏳ | 双路运行 |
-| 7 | 生产部署 + 无人值守 | ⏳ | 部署就绪 |
-| 8 | 分级稳定性验证 | ⏳ | 验收线达标 |
+| 7 | 生产部署 + 无人值守 | ✅ | T1-T10通过，L1-L4待人工 |
+| 8 | 分级稳定性验证 | 🔶 | T1-T10通过，L1-L4待人工 |
 | 9 | 代码收口 + GitHub 交付 | ⏳ | PR 合并 |
 
 图例：✅ 完成 · 🔶 进行中/部分完成 · ⏳ 待启动
@@ -42,6 +42,24 @@
 - **阶段3 完成**：C++ 单图推理 PoC 完成（BmrtDetector + YOLOv7 后处理 + 绘框），预处理 56ms，推理 16ms，后处理 0.6ms；100 次重复推理平均 15.99ms，框数稳定，无内存泄漏；10 项 C++ 单元测试和 26 项 Python 测试全部通过。
 - **阶段4 进行中**：单路硬件视频管线功能通过；BMCV 绘制优化（`--draw-mode bmcv`）消除 sws 往返瓶颈，输出达 10fps；短时 300s 验证通过（10.003fps，退出码 0，RSS +356KB，P95=150ms 稳定，无残留）；完整 30min/2h 长时门禁待人工执行。
 - **阶段4.2 进行中**：单路 RTSP 输入（`--source-type rtsp --input-env HZW_TEST_RTSP_URL`）已实现连接/读取超时（`stimeout`）、受控断线重连（指数退避）、URL 凭据脱敏、停止信号中断阻塞、输出 PTS 单调；`ctest` 8 项 + Python 29 项全通过，20s 文件回归通过，受控无效地址连接路径验证通过；实流与长时门禁待人工执行。
+
+## 3.5 生产运维文档
+
+| 文档 | 用途 |
+|---|---|
+| [生产运维手册](docs/production/operations-guide.md) | 启动、停止、状态、日志、配置、升级、回滚、故障处理 |
+| [阶段7实装验证报告](docs/production/stage7-validation-guide.md) | T1-T10 短测方法与实际结果 |
+| [人工长时测试指南](docs/production/manual-long-run-guide.md) | L1-L4 长测执行步骤和验收标准 |
+| [Windows替换与回滚方案](docs/production/windows-replacement-plan.md) | 灰度替换步骤和回切流程 |
+
+**快速操作：**
+- 启动服务：`sudo systemctl start hangzhouwan.target`
+- 查看状态：`/opt/hangzhouwan/current/bin/hzwctl status`
+- 查看日志：`journalctl -u hangzhouwan-video.service -f`
+- 升级 Release：`sudo bash tools/release/activate_release.sh <candidate>`
+- 回滚 Release：`sudo bash tools/release/rollback_release.sh`
+
+---
 
 ## 4. 快速开始
 

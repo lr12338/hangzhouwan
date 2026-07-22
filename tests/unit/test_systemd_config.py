@@ -36,9 +36,9 @@ class BusinessServiceTest(unittest.TestCase):
     def test_execstart_uses_module(self):
         self.assertIn("-m services.business_enrichment.app", self.content)
 
-    def test_has_runtime_directory(self):
-        """Business 必须声明 RuntimeDirectory=hangzhouwan"""
-        self.assertIn("RuntimeDirectory=hangzhouwan", self.content)
+    def test_no_runtime_directory(self):
+        """Business 不应声明 RuntimeDirectory（共享目录由 tmpfiles.d 管理）"""
+        self.assertNotIn("RuntimeDirectory", self.content)
 
     def test_has_network_online_target(self):
         self.assertIn("network-online.target", self.content)
@@ -77,11 +77,27 @@ class VideoServiceTest(unittest.TestCase):
         """Video 需 network-online.target 依赖"""
         self.assertIn("network-online.target", self.content)
 
-    def test_requires_business_service(self):
-        self.assertIn("Requires=hangzhouwan-business.service", self.content)
+    def test_wants_business_service(self):
+        """Video 用 Wants 而非 Requires，停止 Business 不连带停止 Video"""
+        self.assertIn("Wants=hangzhouwan-business.service", self.content)
+        self.assertNotIn("Requires=hangzhouwan-business.service", self.content)
 
     def test_not_enabled_by_default(self):
         self.assertNotIn("WantedBy=multi-user.target", self.content)
+
+
+class TmpfilesTest(unittest.TestCase):
+    def setUp(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        self.path = os.path.normpath(os.path.join(here, "..", "..", "deploy", "tmpfiles.d", "hangzhouwan.conf"))
+
+    def test_tmpfiles_config_exists(self):
+        """共享 /run/hangzhouwan 由 tmpfiles.d 管理"""
+        self.assertTrue(os.path.isfile(self.path), f"缺失 {self.path}")
+        with open(self.path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("/run/hangzhouwan", content)
+        self.assertIn("linaro", content)
 
 
 class TargetTest(unittest.TestCase):

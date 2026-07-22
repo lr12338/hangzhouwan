@@ -41,11 +41,22 @@
 | `/home/linaro/hangzhouwan_src/docs/02-target-architecture.md` | 目标架构与 9 阶段路线 |
 | `/home/linaro/hangzhouwan_src/docs/PROGRESS.md` | 阶段0 进度跟踪（早期版本） |
 
+## 生产运维文档
+
+| 文档 | 用途 | 状态 |
+|---|---|---|
+| [production/operations-guide.md](production/operations-guide.md) | 生产运维手册（启动/停止/状态/日志/配置/升级/回滚/故障） | ✅ 阶段7 |
+| [production/stage7-validation-guide.md](production/stage7-validation-guide.md) | 阶段7实装验证报告（T1-T10方法+结果） | ✅ 阶段7 |
+| [production/manual-long-run-guide.md](production/manual-long-run-guide.md) | 人工长时测试指南（L1-L4） | ✅ 阶段7 |
+| [production/windows-replacement-plan.md](production/windows-replacement-plan.md) | Windows服务灰度替换与回滚方案 | ✅ 阶段7 |
+| [PROGRESS.md](PROGRESS.md) | 阶段进度唯一权威索引 | ✅ |
+| [AGENT_HANDOFF.md](AGENT_HANDOFF.md) | Agent接手提示词 | ✅ |
+
 ## 工具与测试导航
 
 | 路径 | 用途 |
 |---|---|
-| `tests/run_tests.py` | 测试入口（29 项，纯标准库） |
+| `tests/run_tests.py` | 测试入口（93 项，纯标准库） |
 | `tools/inspect_onnx.py` | ONNX 审计（纯标准库 protobuf 解析） |
 | `tools/redact_secrets.py` | 敏感信息脱敏/扫描（含 `--scan` 仓库扫描） |
 | `tools/validate_config.py` | 配置校验 |
