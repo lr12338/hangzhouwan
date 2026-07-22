@@ -76,3 +76,7 @@ tests/unit_cpp/test_postprocess
 *.o
 Testing/
 tools/image_inference/debug_infer.cpp
+
+# 阶段4.4 内部开发产物（含真实日志/JSONL，不入库）
+artifacts/internal-development/
+*.jsonl

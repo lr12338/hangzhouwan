@@ -32,6 +32,11 @@ struct BmrtDetector::Impl {
   bool ready = false;
   std::string error;
 
+  // 预分配的输入/输出设备 Tensor（构造时分配，infer 复用，析构释放）
+  bm_tensor_t in_tensor{};
+  bm_tensor_t out_tensor{};
+  bool tensors_allocated = false;
+
   void set_error(const std::string& msg) {
     error = msg;
     ready = false;
@@ -125,10 +130,26 @@ BmrtDetector::BmrtDetector(int dev_id, const std::string& bmodel_path)
   }
 
   p_->ready = true;
+
+  // 预分配输入/输出设备 Tensor（仅一次，后续 infer 复用）
+  if (!bmrt_tensor(&p_->in_tensor, p_->bmrt, BM_FLOAT32, p_->in_shape)) {
+    p_->set_error("预分配输入 tensor 失败");
+    return;
+  }
+  if (!bmrt_tensor(&p_->out_tensor, p_->bmrt, BM_FLOAT32, p_->out_shape)) {
+    p_->set_error("预分配输出 tensor 失败");
+    bmrt_free_device(p_->bmrt, p_->in_tensor.device_mem);
+    return;
+  }
+  p_->tensors_allocated = true;
 }
 
 BmrtDetector::~BmrtDetector() {
   if (p_) {
+    if (p_->tensors_allocated) {
+      bmrt_free_device(p_->bmrt, p_->in_tensor.device_mem);
+      bmrt_free_device(p_->bmrt, p_->out_tensor.device_mem);
+    }
     if (p_->bmrt) bmrt_destroy(p_->bmrt);
     if (p_->handle) bm_dev_free(p_->handle);
     delete p_;
@@ -171,19 +192,9 @@ bool BmrtDetector::infer(const std::vector<float>& input,
     return false;
   }
 
-  // 输入 tensor（分配设备内存）
-  bm_tensor_t in_tensor;
-  if (!bmrt_tensor(&in_tensor, p_->bmrt, BM_FLOAT32, p_->in_shape)) {
-    p_->set_error("bmrt_tensor(输入) 分配失败");
-    return false;
-  }
-  // 输出 tensor（分配设备内存）
-  bm_tensor_t out_tensor;
-  if (!bmrt_tensor(&out_tensor, p_->bmrt, BM_FLOAT32, p_->out_shape)) {
-    p_->set_error("bmrt_tensor(输出) 分配失败");
-    bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-    return false;
-  }
+  // 复用预分配的输入/输出设备 Tensor（不再每次 alloc/free）
+  bm_tensor_t& in_tensor = p_->in_tensor;
+  bm_tensor_t& out_tensor = p_->out_tensor;
 
   // Host 输入 -> Device
   bm_status_t st = bm_memcpy_s2d(p_->handle, in_tensor.device_mem,
@@ -192,19 +203,15 @@ bool BmrtDetector::infer(const std::vector<float>& input,
     std::ostringstream os;
     os << "bm_memcpy_s2d 失败 ret=" << st;
     p_->set_error(os.str());
-    bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-    bmrt_free_device(p_->bmrt, out_tensor.device_mem);
     return false;
   }
 
-  // 推理（user_mem=true：使用我们已分配的输出设备内存）
+  // 推理（user_mem=true：使用预分配的输出设备内存）
   bool launched = bmrt_launch_tensor_ex(p_->bmrt, p_->net_name.c_str(),
                                         &in_tensor, 1, &out_tensor, 1,
                                         true, false);
   if (!launched) {
     p_->set_error("bmrt_launch_tensor_ex 失败");
-    bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-    bmrt_free_device(p_->bmrt, out_tensor.device_mem);
     return false;
   }
 
@@ -214,8 +221,6 @@ bool BmrtDetector::infer(const std::vector<float>& input,
     std::ostringstream os;
     os << "bm_thread_sync 失败 ret=" << st;
     p_->set_error(os.str());
-    bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-    bmrt_free_device(p_->bmrt, out_tensor.device_mem);
     return false;
   }
 
@@ -226,14 +231,9 @@ bool BmrtDetector::infer(const std::vector<float>& input,
     std::ostringstream os;
     os << "bm_memcpy_d2s 失败 ret=" << st;
     p_->set_error(os.str());
-    bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-    bmrt_free_device(p_->bmrt, out_tensor.device_mem);
     return false;
   }
 
-  // 释放单次推理资源（模型本身保留）
-  bmrt_free_device(p_->bmrt, in_tensor.device_mem);
-  bmrt_free_device(p_->bmrt, out_tensor.device_mem);
   return true;
 }
 

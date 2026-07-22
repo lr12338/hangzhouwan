@@ -58,7 +58,9 @@ add_library(hzw_inf STATIC
   src/video/detection_region_filter.cpp
   src/config/stream_profile.cpp
   src/monitoring/pipeline_metrics.cpp
-  src/pipeline/single_stream_pipeline.cpp)
+  src/pipeline/single_stream_pipeline.cpp
+  src/application/dual_stream_application.cpp
+  src/business/business_enrichment_client.cpp)
 target_include_directories(hzw_inf PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
 target_link_libraries(hzw_inf PUBLIC bmrt_runtime sophon_ffmpeg JPEG::JPEG Threads::Threads)
 
@@ -69,6 +71,10 @@ target_link_libraries(single_image_infer PRIVATE hzw_inf)
 # 阶段4 单路视频硬件推理
 add_executable(single_video_infer tools/video_inference/single_video_infer.cpp)
 target_link_libraries(single_video_infer PRIVATE hzw_inf)
+
+# 阶段4.4 双路并发视频推理
+add_executable(dual_stream_app tools/dual_stream/dual_stream_app.cpp)
+target_link_libraries(dual_stream_app PRIVATE hzw_inf)
 
 # CPU/BMCV 预处理正确性对照工具
 add_executable(preprocess_compare tools/video_inference/preprocess_compare.cpp)

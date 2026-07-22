@@ -66,6 +66,7 @@ struct Args {
   int64_t rtsp_max_backoff_ms = 30000;
   std::string sink_type = "file";        // file | rtmp
   std::string stream_id;
+  int jitter_buffer_size = 3;
   bool help = false;
 };
 
@@ -107,6 +108,7 @@ bool parse(int argc, char** argv, Args& a, std::string& err) {
     else if (k == "--rtsp-max-backoff-ms") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_max_backoff_ms = std::strtoll(v, nullptr, 10); }
     else if (k == "--sink-type") { v = get(k.c_str(), i); if (v) a.sink_type = v; else return false; }
     else if (k == "--stream-id") { v = get(k.c_str(), i); if (v) a.stream_id = v; else return false; }
+    else if (k == "--jitter-buffer-size") { v = get(k.c_str(), i); if (!v) return false; a.jitter_buffer_size = std::atoi(v); }
     else { err = "未知参数: " + k; return false; }
   }
   return true;
@@ -124,7 +126,8 @@ void usage() {
       "  --source-type file|rtsp --input-env <NAME>  (RTSP: URL 可直接用 --input 或从环境变量读取)\n"
       "  --rtsp-transport tcp|udp --rtsp-stimeout-us 5000000\n"
       "  --rtsp-max-reconnect -1 --rtsp-initial-backoff-ms 1000 --rtsp-max-backoff-ms 30000\n"
-      "  --sink-type file|rtmp --stream-id <A|B>\n");
+      "  --sink-type file|rtmp --stream-id <A|B>\n"
+      "  --jitter-buffer-size 3 (0=禁用抖动缓冲)\n");
 }
 }  // namespace
 
@@ -181,6 +184,7 @@ int main(int argc, char** argv) {
   cfg.rtsp_max_backoff_ms = a.rtsp_max_backoff_ms;
   cfg.sink_type = a.sink_type;
   cfg.stream_id = a.stream_id;
+  cfg.jitter_buffer_size = a.jitter_buffer_size;
 
   ensure_dir(cfg.output_path);
 

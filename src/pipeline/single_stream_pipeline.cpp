@@ -19,7 +19,6 @@ int64_t now_ms() {
 }
 double ms_between(int64_t a, int64_t b) { return static_cast<double>(b - a); }
 
-// 预处理：RGB 640x640 Image -> NCHW FLOAT32 [1,3,640,640]（与单图基线语义一致）。
 bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
                             std::vector<float>& out) {
   if (rgb.width != input_w || rgb.height != input_h) return false;
@@ -46,7 +45,6 @@ bool PipelineConfig::validate(std::string& err) const {
     err = "source_type 必须为 file 或 rtsp"; return false;
   }
   if (source_type == "file" && input_path.empty()) { err = "input_path 为空"; return false; }
-  // RTSP 模式：允许 --input 直接提供 URL（内部开发），或 --input-env 提供环境变量名。
   if (is_rtsp && input_path.empty() && input_env.empty()) {
     err = "RTSP 需通过 --input 或 --input-env 提供输入 URL"; return false;
   }
@@ -56,7 +54,6 @@ bool PipelineConfig::validate(std::string& err) const {
   if (output_fps <= 0) { err = "output_fps 非法"; return false; }
   if (inference_fps <= 0) { err = "inference_fps 非法"; return false; }
   if (inference_fps > output_fps) { err = "inference_fps 大于 output_fps"; return false; }
-  // 文件模式仍要求整除关系（基于序列号抽帧）；RTSP 模式使用墙钟时间调度，不要求整除。
   if (!is_rtsp) {
     if (inference_fps > source_fps) { err = "inference_fps 大于 source_fps"; return false; }
     if (output_fps > source_fps) { err = "output_fps 大于 source_fps"; return false; }
@@ -86,12 +83,15 @@ bool PipelineConfig::validate(std::string& err) const {
     ro.max_backoff_ms = rtsp_max_backoff_ms;
     if (!ro.validate(err)) return false;
   }
+  if (jitter_buffer_size < 0) { err = "jitter_buffer_size 不能为负"; return false; }
   return true;
 }
 
 SingleStreamPipeline::SingleStreamPipeline() = default;
 SingleStreamPipeline::~SingleStreamPipeline() {
   request_stop();
+  if (business_jsonl_) { std::fclose(business_jsonl_); business_jsonl_ = nullptr; }
+  if (t_capture_.joinable()) t_capture_.join();
   if (t_decode_.joinable()) t_decode_.join();
   if (t_process_.joinable()) t_process_.join();
   if (t_encode_.joinable()) t_encode_.join();
@@ -108,12 +108,17 @@ void SingleStreamPipeline::set_error(int code, const std::string& msg) {
 }
 
 void SingleStreamPipeline::request_stop() {
-  source_.request_stop();  // 触发中断回调，打断阻塞中的 open/read
-  sink_.request_stop();    // 中断 RTMP 退避等待
+  source_.request_stop();
+  sink_.request_stop();
   bool was = stop_.exchange(true);
   if (!was) {
     if (q_decode_) q_decode_->close();
     if (q_encode_) q_encode_->close();
+    {
+      std::lock_guard<std::mutex> lk(jitter_mutex_);
+      capture_done_ = true;
+    }
+    jitter_cv_.notify_all();
   }
 }
 
@@ -125,13 +130,13 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     return 2;
   }
 
+  metrics_.stream_id = cfg_.stream_id;
   if (!cfg_.stream_id.empty()) {
     std::fprintf(stdout, "信息 | StreamProfile | stream_id=%s\n", cfg_.stream_id.c_str());
     std::fflush(stdout);
   }
 
   if (cfg_.source_type == "rtsp") {
-    // 内部开发阶段允许 --input 直接提供 RTSP URL；否则从环境变量读取。
     std::string url;
     if (!cfg_.input_path.empty()) {
       url = cfg_.input_path;
@@ -172,7 +177,6 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
                detector_->output_name().c_str());
   std::fflush(stdout);
 
-  // BMCV 预处理/绘制初始化（复用 detector 的设备句柄，避免二次打开设备）。
   bool want_bmcv = (cfg_.preprocess == "bmcv" || cfg_.draw_mode == "bmcv");
   if (want_bmcv) {
     std::string berr;
@@ -187,7 +191,6 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     std::fflush(stdout);
   }
 
-  // 禁区过滤配置（阶段4.3）
   if (cfg_.enable_region_filter) {
     region_filter_.configure(cfg_.forbidden_rectangles, cfg_.forbidden_polygons,
                              cfg_.region_ref_width, cfg_.region_ref_height,
@@ -205,71 +208,108 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     return 5;
   }
 
+  // 业务增强初始化
+  if (cfg_.enable_business) {
+    business_client_ = std::make_unique<BusinessEnrichmentClient>();
+    if (business_client_->connect(cfg_.business_socket)) {
+      std::fprintf(stdout, "信息 | 业务 | Sidecar 连接成功 %s\n", cfg_.business_socket.c_str());
+    } else {
+      std::fprintf(stdout, "信息 | 业务 | Sidecar 连接失败，降级为仅检测\n");
+    }
+    if (!cfg_.business_jsonl_path.empty()) {
+      business_jsonl_ = std::fopen(cfg_.business_jsonl_path.c_str(), "a");
+      if (business_jsonl_) {
+        std::fprintf(stdout, "信息 | 业务 | JSONL 输出 %s\n", cfg_.business_jsonl_path.c_str());
+      }
+    }
+  }
+
   auto releaser = [](VideoFrame& f) { f.release(); };
   q_decode_ = std::make_unique<FrameQueue>(cfg_.queue_size, releaser);
   q_encode_ = std::make_unique<FrameQueue>(cfg_.queue_size, releaser);
 
-  // 重置时间调度状态
   last_output_ms_ = 0;
   last_infer_ms_ = 0;
+  capture_done_ = false;
 
   start_ms_ = now_ms();
+  t_capture_ = std::thread([this] { capture_loop(cfg_); });
   t_decode_ = std::thread([this] { decode_loop(cfg_); });
   t_process_ = std::thread([this] { process_loop(cfg_); });
   t_encode_ = std::thread([this] { encode_loop(cfg_); });
   t_metrics_ = std::thread([this] { metrics_loop(cfg_); });
 
+  t_capture_.join();
+  {
+    std::lock_guard<std::mutex> lk(jitter_mutex_);
+    capture_done_ = true;
+  }
+  jitter_cv_.notify_all();
   t_decode_.join();
-  q_decode_->close();       // 解码结束，通知处理线程退出
+  q_decode_->close();
   t_process_.join();
-  q_encode_->close();       // 处理结束，通知编码线程退出
+  q_encode_->close();
   t_encode_.join();
   stop_.store(true);
   t_metrics_.join();
+
+  metrics_.rtsp_reconnects.store(source_.reconnect_count());
+  metrics_.rtmp_reconnects.store(sink_.rtmp_reconnect_count());
 
   sink_.close();
   source_.close();
 
   std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
-  std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s sink=%s RTMP重连=%d 退出码=%d\n",
+  std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s sink=%s RTSP重连=%d RTMP重连=%d 退出码=%d\n",
                static_cast<long long>(sink_.output_frames()),
                sink_.actual_encoder().c_str(), sink_.actual_container().c_str(),
-               sink_.sink_type().c_str(), sink_.rtmp_reconnect_count(),
-               exit_code_.load());
+               sink_.sink_type().c_str(), source_.reconnect_count(),
+               sink_.rtmp_reconnect_count(), exit_code_.load());
   std::fflush(stdout);
   return exit_code_.load();
 }
 
-void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
+// capture_loop：持续从视频源读取帧，存入抖动缓冲。
+// 抖动缓冲吸收 RTSP 突发到达，使 decode_loop 调度器能按 output_fps 稳定输出。
+void SingleStreamPipeline::capture_loop(const PipelineConfig& cfg) {
   const bool is_rtsp = (cfg.source_type == "rtsp");
-  // 文件模式：基于序列号抽帧
-  const int output_step = is_rtsp ? 1 : (cfg.source_fps / cfg.output_fps);
-  // 文件模式：按源帧率回放节流
-  const int64_t frame_interval_ms = 1000 / cfg.source_fps;
+  const int64_t frame_interval_ms = is_rtsp ? 0 : (1000 / cfg.source_fps);
   const int64_t pace_start_ms = now_ms();
-  // RTSP 模式：墙钟时间调度
-  const int64_t output_interval_ms = 1000 / cfg.output_fps;
   int prev_epoch = -1;
   VideoFrame vf;
   std::string err;
   while (!stop_.load()) {
+    int64_t read_start = now_ms();
     if (!source_.read(vf, err)) {
       if (err == "EOF") {
         std::fprintf(stdout, "信息 | 解码 | 正常 EOF，循环完成 %d 轮\n",
                      source_.loops_completed());
         std::fflush(stdout);
       } else if (err == "停止") {
-        // 信号/限时主动停止，非错误
+        // 信号/限时主动停止
       } else {
         set_error(6, "解码失败: " + err);
       }
       break;
     }
+    metrics_.read_success.fetch_add(1);
     metrics_.decoded_frames.fetch_add(1);
     metrics_.read_frames.store(source_.packets_read());
+    metrics_.last_read_ms.store(now_ms());
+    metrics_.record_read_ms(ms_between(read_start, now_ms()));
 
+    // RTSP epoch 变化（重连）：清除过期缓冲帧
+    if (is_rtsp && vf.source_epoch != prev_epoch) {
+      prev_epoch = vf.source_epoch;
+      std::lock_guard<std::mutex> lk(jitter_mutex_);
+      while (!jitter_buf_.empty()) {
+        jitter_buf_.front().release();
+        jitter_buf_.pop_front();
+      }
+    }
+
+    // 文件模式：按源帧率回放节流
     if (!is_rtsp) {
-      // 文件模式：按源帧率回放节流
       const int64_t expected_ms = pace_start_ms + vf.sequence * frame_interval_ms;
       const int64_t actual_ms = now_ms();
       if (actual_ms < expected_ms) {
@@ -277,28 +317,85 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
       }
     }
 
-    // RTSP 重连后重置调度（epoch 变化）
-    if (is_rtsp && vf.source_epoch != prev_epoch) {
-      prev_epoch = vf.source_epoch;
-      last_output_ms_ = 0;  // 重连后立即输出第一帧
+    // 推入抖动缓冲（满时丢最旧帧）
+    {
+      std::lock_guard<std::mutex> lk(jitter_mutex_);
+      int max_buf = cfg.jitter_buffer_size > 0 ? cfg.jitter_buffer_size : 1;
+      while (static_cast<int>(jitter_buf_.size()) >= max_buf) {
+        jitter_buf_.front().release();
+        jitter_buf_.pop_front();
+        metrics_.decode_queue_dropped.fetch_add(1);
+      }
+      jitter_buf_.push_back(std::move(vf));
     }
+    vf.frame = nullptr;
+    jitter_cv_.notify_one();
+  }
+}
 
-    bool should_output;
+// decode_loop：调度输出。从抖动缓冲取帧，按 output_fps 墙钟时间调度（RTSP）
+// 或序列号抽帧（文件），推入 q_decode。
+// 关键改进：RTSP 模式仅在"到输出时间"时从缓冲取帧并输出，其余时间帧留在缓冲中，
+// 避免突发到达时只输出 1 帧/突发的问题。
+void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
+  const bool is_rtsp = (cfg.source_type == "rtsp");
+  const int output_step = is_rtsp ? 1 : (cfg.source_fps / cfg.output_fps);
+  const int64_t output_interval_ms = is_rtsp ? (1000 / cfg.output_fps) : 0;
+  int prev_epoch = -1;
+
+  while (!stop_.load()) {
     if (is_rtsp) {
-      // 墙钟时间调度：每 output_interval_ms 最多输出一个最新帧
       const int64_t t = now_ms();
-      should_output = (last_output_ms_ == 0) || (t - last_output_ms_ >= output_interval_ms);
-      if (should_output) last_output_ms_ = t;
-    } else {
-      should_output = (vf.sequence % output_step == 0);
-    }
-
-    if (should_output) {
+      const bool should_output =
+          (last_output_ms_ == 0) || (t - last_output_ms_ >= output_interval_ms);
+      if (!should_output) {
+        int64_t wait = output_interval_ms - (t - last_output_ms_);
+        if (wait > 10) wait = 10;
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait));
+        continue;
+      }
+      // 到输出时间：从抖动缓冲取最旧帧（FIFO，保留突发帧）
+      VideoFrame vf;
+      {
+        std::unique_lock<std::mutex> lk(jitter_mutex_);
+        jitter_cv_.wait(lk, [this] {
+          return !jitter_buf_.empty() || capture_done_ || stop_.load();
+        });
+        if (stop_.load()) break;
+        if (jitter_buf_.empty() && capture_done_) break;
+        if (jitter_buf_.empty()) continue;
+        vf = std::move(jitter_buf_.front());
+        jitter_buf_.pop_front();
+      }
+      if (vf.source_epoch != prev_epoch) {
+        prev_epoch = vf.source_epoch;
+      }
+      metrics_.scheduled_output.fetch_add(1);
       metrics_.queued_frames.fetch_add(1);
       q_decode_->push(std::move(vf));
-      vf.frame = nullptr;
+      last_output_ms_ = now_ms();
     } else {
-      vf.release();  // 非输出帧立即归还解码缓冲池
+      // 文件模式：从缓冲取帧，按序列号抽帧
+      VideoFrame vf;
+      {
+        std::unique_lock<std::mutex> lk(jitter_mutex_);
+        jitter_cv_.wait(lk, [this] {
+          return !jitter_buf_.empty() || capture_done_ || stop_.load();
+        });
+        if (stop_.load()) break;
+        if (jitter_buf_.empty() && capture_done_) break;
+        if (jitter_buf_.empty()) continue;
+        vf = std::move(jitter_buf_.front());
+        jitter_buf_.pop_front();
+      }
+      const bool should_output = (vf.sequence % output_step == 0);
+      if (should_output) {
+        metrics_.scheduled_output.fetch_add(1);
+        metrics_.queued_frames.fetch_add(1);
+        q_decode_->push(std::move(vf));
+      } else {
+        vf.release();
+      }
     }
   }
 }
@@ -349,16 +446,15 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   VideoFrame vf;
   while (!stop_.load() && q_decode_->pop(vf)) {
     if (!vf.frame) continue;
-    // 源 epoch 变化（RTSP 重连）：清除过期检测结果，重置推理调度。
     if (vf.source_epoch != last_epoch_) {
       snapshot_.clear();
       last_epoch_ = vf.source_epoch;
-      last_infer_ms_ = 0;  // 重连后立即推理
+      last_infer_ms_ = 0;
     }
     const int64_t proc_start = now_ms();
     AVFrame* f = vf.frame;
 
-    // 推理调度：文件模式基于序列号；RTSP 模式基于墙钟时间。
+    // 推理调度
     bool is_infer;
     if (is_rtsp) {
       const int64_t t = now_ms();
@@ -372,8 +468,10 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       int64_t t0 = now_ms();
       bool pre_ok = false;
       if (bmcv_pre) {
+        int64_t tvpp = now_ms();
         input.assign(static_cast<size_t>(detector_->input_element_count()), 0.0f);
         pre_ok = bmcv_.preprocess(f, input.data(), berr);
+        metrics_.record_vpp_ms(ms_between(tvpp, now_ms()));
         if (!pre_ok) {
           set_error(9, "BMCV 预处理失败: " + berr);
         }
@@ -382,9 +480,14 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
         const int src_stride[2] = {f->linesize[0], f->linesize[1]};
         uint8_t* dst640[1] = {rgb640.data.data()};
         const int dst_stride640[1] = {640 * 3};
+        int64_t tnorm0 = now_ms();
         sws_scale(nv12_to_rgb640, src, src_stride, 0, source_h_, dst640, dst_stride640);
+        metrics_.record_vpp_ms(ms_between(tnorm0, now_ms()));
+        int64_t tnorm1 = now_ms();
         pre_ok = preprocess_rgb_to_nchw(rgb640, input_size, input_size, input);
+        metrics_.record_normalize_ms(ms_between(tnorm1, now_ms()));
       }
+      metrics_.preprocess_count.fetch_add(1);
       if (pre_ok) {
         int64_t t1 = now_ms();
         if (detector_->infer(input, output)) {
@@ -393,9 +496,11 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           postprocess_yolov7(output.data(), num_boxes, num_vals, source_w_, source_h_,
                              input_size, cfg.conf, cfg.iou, dets);
           int64_t t3 = now_ms();
-          // 禁区过滤：NMS 后、绘框前
+          // 禁区过滤
           if (region_filter_.enabled()) {
+            int64_t treg = now_ms();
             region_filter_.filter(dets);
+            metrics_.record_region_ms(ms_between(treg, now_ms()));
           }
           metrics_.record_pre_ms(ms_between(t0, t1));
           metrics_.record_infer_ms(ms_between(t1, t2));
@@ -408,16 +513,46 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           snap.generated_time_ms = t3;
           snap.detections = std::move(dets);
           snapshot_.update(snap);
+          // 业务增强：坐标预测 + AIS 匹配（不阻塞视频路径）
+          if (business_client_) {
+            std::vector<DetectionBox> boxes;
+            const auto& sd = snap.detections;
+            for (size_t i = 0; i < sd.size(); ++i) {
+              DetectionBox b;
+              b.detection_id = static_cast<int>(i);
+              b.score = sd[i].score;
+              b.x1 = sd[i].x1; b.y1 = sd[i].y1;
+              b.x2 = sd[i].x2; b.y2 = sd[i].y2;
+              boxes.push_back(b);
+            }
+            std::vector<BusinessResult> bres;
+            business_client_->enrich(cfg.stream_id, vf.sequence, source_w_, source_h_,
+                                     boxes, bres, 30);
+            if (business_jsonl_ && !bres.empty()) {
+              std::fprintf(business_jsonl_,
+                  "{\"sid\":\"%s\",\"seq\":%lld,\"n\":%zu",
+                  cfg.stream_id.c_str(), static_cast<long long>(vf.sequence), bres.size());
+              for (const auto& r : bres) {
+                std::fprintf(business_jsonl_,
+                    ",{\"lon\":%.6f,\"lat\":%.6f,\"v\":%d,\"m\":%d,\"mmsi\":\"%s\"}",
+                    r.longitude, r.latitude, r.coordinate_valid ? 1 : 0,
+                    r.ais_matched ? 1 : 0, r.mmsi.c_str());
+              }
+              std::fprintf(business_jsonl_, "}\n");
+              std::fflush(business_jsonl_);
+            }
+          }
         } else {
           set_error(7, "推理失败: " + detector_->last_error());
         }
       }
     }
 
-    // 绘框：复用最近 snapshot，过期则不绘制。
+    // 绘框
     DetectionSnapshot snap = snapshot_.get();
     const bool has_draw = !snap.expired(proc_start, cfg.result_ttl_ms) && !snap.detections.empty();
     if (cpu_draw) {
+      int64_t tdraw = now_ms();
       const uint8_t* src[2] = {f->data[0], f->data[1]};
       const int src_stride[2] = {f->linesize[0], f->linesize[1]};
       uint8_t* dst960[1] = {rgb.data.data()};
@@ -438,14 +573,20 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       uint8_t* d2[2] = {f->data[0], f->data[1]};
       const int d2_stride[2] = {f->linesize[0], f->linesize[1]};
       sws_scale(rgb_to_nv12, s2, s2_stride, 0, source_h_, d2, d2_stride);
-    } else if (bmcv_draw && has_draw) {
-      if (!bmcv_.draw_rectangles(f, snap.detections, berr)) {
-        set_error(10, "BMCV 绘制失败: " + berr);
+      metrics_.record_draw_ms(ms_between(tdraw, now_ms()));
+    } else if (bmcv_draw) {
+      int64_t tdraw = now_ms();
+      if (has_draw) {
+        if (!bmcv_.draw_rectangles(f, snap.detections, berr)) {
+          set_error(10, "BMCV 绘制失败: " + berr);
+        }
       }
+      metrics_.record_draw_ms(ms_between(tdraw, now_ms()));
     }
 
     const int64_t e2e = now_ms() - vf.capture_time_ms;
     metrics_.record_e2e_ms(static_cast<double>(e2e));
+    metrics_.decode_queue_dropped.store(metrics_.decode_queue_dropped.load());
     metrics_.dropped_frames.store(q_decode_->dropped() + q_encode_->dropped());
 
     q_encode_->push(std::move(vf));
@@ -462,13 +603,17 @@ void SingleStreamPipeline::encode_loop(const PipelineConfig& cfg) {
   std::string err;
   while (!stop_.load() && q_encode_->pop(vf)) {
     if (!vf.frame) continue;
+    metrics_.encode_sent.fetch_add(1);
     int64_t t0 = now_ms();
     if (!sink_.write(vf, err)) {
+      metrics_.rtmp_write_fail.fetch_add(1);
       set_error(8, "编码失败: " + err);
       vf.release();
       break;
     }
-    metrics_.record_encode_ms(ms_between(t0, now_ms()));
+    double write_ms = ms_between(t0, now_ms());
+    metrics_.record_encode_ms(write_ms);
+    metrics_.record_rtmp_ms(write_ms);
     metrics_.output_frames.fetch_add(1);
     vf.release();
   }
@@ -481,6 +626,12 @@ void SingleStreamPipeline::metrics_loop(const PipelineConfig& cfg) {
     }
     if (stop_.load()) break;
     metrics_.set_queue_length(static_cast<int>(q_decode_->size() + q_encode_->size()));
+    {
+      std::lock_guard<std::mutex> lk(jitter_mutex_);
+      metrics_.set_jitter_length(static_cast<int>(jitter_buf_.size()));
+    }
+    metrics_.rtsp_reconnects.store(source_.reconnect_count());
+    metrics_.rtmp_reconnects.store(sink_.rtmp_reconnect_count());
     std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
     std::fflush(stdout);
     if (cfg.max_seconds > 0 && (now_ms() - start_ms_) / 1000 >= cfg.max_seconds) {

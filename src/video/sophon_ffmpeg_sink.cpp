@@ -315,6 +315,8 @@ void SophonVideoSink::drain_packets(std::string& err) {
     pkt_->stream_index = vstream_->index;
     if (av_interleaved_write_frame(mux_, pkt_) < 0) {
       err = "封装写帧失败";
+    } else {
+      total_output_frames_.fetch_add(1);
     }
     av_packet_unref(pkt_);
   }

@@ -72,7 +72,7 @@ class SophonVideoSink {
   // 请求停止（信号处理调用）：中断 RTMP 退避等待。
   void request_stop() { stop_requested_.store(true); }
 
-  int64_t output_frames() const { return pts_.current(); }
+  int64_t output_frames() const { return total_output_frames_.load(); }
   std::string actual_container() const { return container_; }
   std::string actual_encoder() const { return encoder_name_; }
   std::string sink_type() const { return sink_type_; }
@@ -106,6 +106,7 @@ class SophonVideoSink {
   std::atomic<bool> stop_requested_{false};
   RtmpBackoffPolicy rtmp_backoff_;
   int rtmp_reconnect_count_ = 0;
+  std::atomic<int64_t> total_output_frames_{0};  // 实际写入总帧数（不受 PTS 重置影响）
   // 保存重连所需的参数
   std::string output_url_;
   int saved_width_ = 0;

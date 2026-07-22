@@ -123,3 +123,62 @@ export HZW_TEST_RTSP_URL='rtsp://用户名:your_password@测试地址:554/路径
 ## 执行红线（始终遵守）
 
 禁止：安装 TPU-MLIR、Python SAIL、Torch/CUDA、修改 libsophon、INT8 转换、连接生产 RTSP/MQTT/RTMP/启动双路/INT8、修改 systemd、硬编码输出名为 `output`、伪造测试结果。
+
+---
+
+## 2026-07-22 阶段4.4 交接
+
+### 本次完成
+
+1. **B路吞吐诊断与修复**
+   - 根因：B路RTSP突发到达 + 墙钟调度仅输出1帧/突发
+   - 修复：capture_loop线程 + 5帧抖动缓冲，B路从2.48fps提升至9.05fps
+   - 修复：sink output_frames() PTS重置导致计数不准的bug
+
+2. **双路并发架构**
+   - DualStreamApplication：A/B同时启动，独立RTSP/RTMP/推理/编码
+   - per_stream模式：A/B各加载一份bmodel，并发推理
+   - BmrtDetector张量预分配（减少alloc/free开销）
+
+3. **业务Sidecar**
+   - Python sidecar + Unix Domain Socket + C++ BusinessEnrichmentClient
+   - 坐标预测（sklearn不可用->接口模拟）
+   - MQTT AIS订阅（paho-mqtt，连接iot.hifleet.com成功）
+   - AIS 6-bit解码器（自实现，支持类型1/2/3/4/18）
+   - 视觉-AIS最近邻匹配（haversine距离，一对一）
+   - 30ms超时降级，不阻塞视频路径
+
+4. **分段指标增强**
+   - 新增15+计数器和11个耗时分段
+   - 日志带stream_id=[A]/[B]前缀
+
+5. **测试结果**
+   - T0 B路60s：9.05fps（修复后）
+   - T1 双路纯视频60s：A=9.62fps B=7.92fps
+   - T2 双路+业务60s：A=9.52fps B=7.78fps（<2%开销）
+   - T5 全链路300s：A=9.90fps B=5.91fps，1976 JSONL事件，退出码0
+
+### 待人工执行
+
+- 30分钟和2小时长时稳定性测试
+- 真实AIS数据验证（需有船经过时）
+- 坐标真实模型验证（需x86导出sklearn模型为JSON）
+
+### 风险
+
+- B路RTSP每~100秒断连1次（300s内3次），是B路fps偏低的主因
+- sklearn/scipy在板端不可用，坐标预测为接口模拟
+- AIS缓存测试期间为0（区域内无船或无消息发布）
+
+### 关键文件
+
+- `include/application/dual_stream_application.h`
+- `src/application/dual_stream_application.cpp`
+- `tools/dual_stream/dual_stream_app.cpp`
+- `tools/dual_stream/dual_full_stack_stability.sh`
+- `tools/business/business_sidecar.py`
+- `include/business/business_enrichment_client.h`
+- `src/business/business_enrichment_client.cpp`
+- `docs/25-dual-stream-full-stack.md`
+- `docs/26-dual-stream-manual-long-run.md`
+- `docs/27-coordinate-ais-mqtt-architecture.md`

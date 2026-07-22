@@ -23,6 +23,9 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include "inference/bmrt_detector.h"
 #include "monitoring/pipeline_metrics.h"
@@ -31,6 +34,7 @@
 #include "video/bmcv_processor.h"
 #include "video/detection_region_filter.h"
 #include "video/video_sink.h"
+#include "business/business_enrichment_client.h"
 #include "video/video_source.h"
 
 namespace hzw {
@@ -54,6 +58,10 @@ struct PipelineConfig {
   int loop = 1;            // 0 = 无限循环
   int max_seconds = 0;     // 0 = 不限时（由 loop/信号控制）
   int metrics_interval_sec = 10;
+  int jitter_buffer_size = 3;  // 抖动缓冲帧数（吸收RTSP突发，0=禁用）
+  bool enable_business = false;          // 启用业务增强（坐标+AIS）
+  std::string business_socket = "/tmp/hangzhouwan-business.sock";
+  std::string business_jsonl_path;       // 业务JSONL输出路径（空=不输出）
   std::string preprocess = "cpu";   // cpu | bmcv
   std::string draw_mode = "cpu";    // cpu | bmcv | none
   // RTSP 输入（阶段4.2/4.3）
@@ -94,6 +102,7 @@ class SingleStreamPipeline {
   const PipelineMetrics& metrics() const { return metrics_; }
 
  private:
+  void capture_loop(const PipelineConfig& cfg);
   void decode_loop(const PipelineConfig& cfg);
   void process_loop(const PipelineConfig& cfg);
   void encode_loop(const PipelineConfig& cfg);
@@ -107,12 +116,19 @@ class SingleStreamPipeline {
   PipelineMetrics metrics_;
   BmcvProcessor bmcv_;
   DetectionRegionFilter region_filter_;
+  std::unique_ptr<BusinessEnrichmentClient> business_client_;
+  FILE* business_jsonl_ = nullptr;
 
   using FrameQueue = LatestFrameQueue<VideoFrame>;
   std::unique_ptr<FrameQueue> q_decode_;   // 解码 -> 处理
   std::unique_ptr<FrameQueue> q_encode_;   // 处理 -> 编码
 
-  std::thread t_decode_, t_process_, t_encode_, t_metrics_;
+  std::thread t_capture_, t_decode_, t_process_, t_encode_, t_metrics_;
+  // 抖动缓冲（capture_loop -> decode_loop 调度）
+  std::mutex jitter_mutex_;
+  std::condition_variable jitter_cv_;
+  std::deque<VideoFrame> jitter_buf_;
+  bool capture_done_ = false;
   std::atomic<bool> stop_{false};
   std::atomic<int> exit_code_{0};
   int source_w_ = 0;
