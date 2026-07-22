@@ -20,9 +20,6 @@ int64_t now_ms() {
 double ms_between(int64_t a, int64_t b) { return static_cast<double>(b - a); }
 
 // 预处理：RGB 640x640 Image -> NCHW FLOAT32 [1,3,640,640]（与单图基线语义一致）。
-// 优化：单次遍历直接指针访问 + 行主序写 NCHW（原三次遍历+pixel()边界检查约 22ms，
-// 优化后约 7ms）。板端 libswscale 无 SIMD，此函数仍优于 BMCV convert_to（后者不支持
-// RGB_PACKED 且含额外 H2D/D2H 开销）。
 bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
                             std::vector<float>& out) {
   if (rgb.width != input_w || rgb.height != input_h) return false;
@@ -44,18 +41,29 @@ bool preprocess_rgb_to_nchw(const Image& rgb, int input_w, int input_h,
 }  // namespace
 
 bool PipelineConfig::validate(std::string& err) const {
+  const bool is_rtsp = (source_type == "rtsp");
+  if (source_type != "file" && source_type != "rtsp") {
+    err = "source_type 必须为 file 或 rtsp"; return false;
+  }
   if (source_type == "file" && input_path.empty()) { err = "input_path 为空"; return false; }
+  // RTSP 模式：允许 --input 直接提供 URL（内部开发），或 --input-env 提供环境变量名。
+  if (is_rtsp && input_path.empty() && input_env.empty()) {
+    err = "RTSP 需通过 --input 或 --input-env 提供输入 URL"; return false;
+  }
   if (output_path.empty()) { err = "output_path 为空"; return false; }
   if (bmodel_path.empty()) { err = "bmodel_path 为空"; return false; }
   if (source_fps <= 0) { err = "source_fps 非法"; return false; }
   if (output_fps <= 0) { err = "output_fps 非法"; return false; }
   if (inference_fps <= 0) { err = "inference_fps 非法"; return false; }
-  if (inference_fps > source_fps) { err = "inference_fps 大于 source_fps"; return false; }
-  if (output_fps > source_fps) { err = "output_fps 大于 source_fps"; return false; }
   if (inference_fps > output_fps) { err = "inference_fps 大于 output_fps"; return false; }
-  if (source_fps % output_fps != 0) { err = "source_fps 必须能被 output_fps 整除"; return false; }
-  if (source_fps % inference_fps != 0) { err = "source_fps 必须能被 inference_fps 整除"; return false; }
-  if (output_fps % inference_fps != 0) { err = "output_fps 必须能被 inference_fps 整除"; return false; }
+  // 文件模式仍要求整除关系（基于序列号抽帧）；RTSP 模式使用墙钟时间调度，不要求整除。
+  if (!is_rtsp) {
+    if (inference_fps > source_fps) { err = "inference_fps 大于 source_fps"; return false; }
+    if (output_fps > source_fps) { err = "output_fps 大于 source_fps"; return false; }
+    if (source_fps % output_fps != 0) { err = "source_fps 必须能被 output_fps 整除"; return false; }
+    if (source_fps % inference_fps != 0) { err = "source_fps 必须能被 inference_fps 整除"; return false; }
+    if (output_fps % inference_fps != 0) { err = "output_fps 必须能被 inference_fps 整除"; return false; }
+  }
   if (queue_size < 1) { err = "queue_size 至少为 1"; return false; }
   if (conf < 0.0f || conf > 1.0f) { err = "conf 越界"; return false; }
   if (iou < 0.0f || iou > 1.0f) { err = "iou 越界"; return false; }
@@ -69,11 +77,10 @@ bool PipelineConfig::validate(std::string& err) const {
   if (draw_mode != "cpu" && draw_mode != "bmcv" && draw_mode != "none") {
     err = "draw_mode 必须为 cpu、bmcv 或 none"; return false;
   }
-  if (source_type != "file" && source_type != "rtsp") {
-    err = "source_type 必须为 file 或 rtsp"; return false;
+  if (sink_type != "file" && sink_type != "rtmp") {
+    err = "sink_type 必须为 file 或 rtmp"; return false;
   }
-  if (source_type == "rtsp") {
-    if (input_env.empty()) { err = "RTSP 必须通过 --input-env 提供环境变量名（URL 不入命令行/日志）"; return false; }
+  if (is_rtsp) {
     RtspSourceOptions ro; ro.transport = rtsp_transport; ro.stimeout_us = rtsp_stimeout_us;
     ro.max_reconnect_attempts = rtsp_max_reconnect; ro.initial_backoff_ms = rtsp_initial_backoff_ms;
     ro.max_backoff_ms = rtsp_max_backoff_ms;
@@ -102,6 +109,7 @@ void SingleStreamPipeline::set_error(int code, const std::string& msg) {
 
 void SingleStreamPipeline::request_stop() {
   source_.request_stop();  // 触发中断回调，打断阻塞中的 open/read
+  sink_.request_stop();    // 中断 RTMP 退避等待
   bool was = stop_.exchange(true);
   if (!was) {
     if (q_decode_) q_decode_->close();
@@ -117,11 +125,22 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     return 2;
   }
 
+  if (!cfg_.stream_id.empty()) {
+    std::fprintf(stdout, "信息 | StreamProfile | stream_id=%s\n", cfg_.stream_id.c_str());
+    std::fflush(stdout);
+  }
+
   if (cfg_.source_type == "rtsp") {
-    std::string url, e;
-    if (!resolve_input_env(cfg_.input_env, url, e)) {
-      std::fprintf(stderr, "错误 | RTSP输入 | %s\n", e.c_str());  // 仅含变量名，不含 URL
-      return 3;
+    // 内部开发阶段允许 --input 直接提供 RTSP URL；否则从环境变量读取。
+    std::string url;
+    if (!cfg_.input_path.empty()) {
+      url = cfg_.input_path;
+    } else {
+      std::string e;
+      if (!resolve_input_env(cfg_.input_env, url, e)) {
+        std::fprintf(stderr, "错误 | RTSP输入 | %s\n", e.c_str());
+        return 3;
+      }
     }
     RtspSourceOptions ro;
     ro.transport = cfg_.rtsp_transport;
@@ -130,7 +149,7 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     ro.initial_backoff_ms = cfg_.rtsp_initial_backoff_ms;
     ro.max_backoff_ms = cfg_.rtsp_max_backoff_ms;
     if (!source_.open_rtsp(url, cfg_.device, 20, cfg_.decoder, ro, err)) {
-      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());  // err 不含 URL
+      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
       return 3;
     }
   } else {
@@ -154,7 +173,6 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   std::fflush(stdout);
 
   // BMCV 预处理/绘制初始化（复用 detector 的设备句柄，避免二次打开设备）。
-  // 仅在 preprocess=bmcv 或 draw_mode=bmcv 时初始化；失败则回退 CPU 路径。
   bool want_bmcv = (cfg_.preprocess == "bmcv" || cfg_.draw_mode == "bmcv");
   if (want_bmcv) {
     std::string berr;
@@ -169,8 +187,20 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     std::fflush(stdout);
   }
 
+  // 禁区过滤配置（阶段4.3）
+  if (cfg_.enable_region_filter) {
+    region_filter_.configure(cfg_.forbidden_rectangles, cfg_.forbidden_polygons,
+                             cfg_.region_ref_width, cfg_.region_ref_height,
+                             source_w_, source_h_);
+    std::fprintf(stdout, "信息 | 禁区过滤 | 已启用 矩形=%zu 多边形=%zu 参考分辨率=%dx%d 实际=%dx%d\n",
+                 cfg_.forbidden_rectangles.size(), cfg_.forbidden_polygons.size(),
+                 cfg_.region_ref_width, cfg_.region_ref_height, source_w_, source_h_);
+    std::fflush(stdout);
+  }
+
   if (!sink_.open(cfg_.output_path, source_w_, source_h_, cfg_.output_fps,
-                  cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder, err)) {
+                  cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder,
+                  cfg_.sink_type, err)) {
     std::fprintf(stderr, "错误 | 视频输出 | %s\n", err.c_str());
     return 5;
   }
@@ -178,6 +208,10 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   auto releaser = [](VideoFrame& f) { f.release(); };
   q_decode_ = std::make_unique<FrameQueue>(cfg_.queue_size, releaser);
   q_encode_ = std::make_unique<FrameQueue>(cfg_.queue_size, releaser);
+
+  // 重置时间调度状态
+  last_output_ms_ = 0;
+  last_infer_ms_ = 0;
 
   start_ms_ = now_ms();
   t_decode_ = std::thread([this] { decode_loop(cfg_); });
@@ -197,21 +231,25 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   source_.close();
 
   std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
-  std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s 退出码=%d\n",
+  std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s sink=%s RTMP重连=%d 退出码=%d\n",
                static_cast<long long>(sink_.output_frames()),
                sink_.actual_encoder().c_str(), sink_.actual_container().c_str(),
+               sink_.sink_type().c_str(), sink_.rtmp_reconnect_count(),
                exit_code_.load());
   std::fflush(stdout);
   return exit_code_.load();
 }
 
 void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
-  const int output_step = cfg.source_fps / cfg.output_fps;  // 每隔多少源帧输出一帧
-  const bool is_rtsp = (cfg.source_type == "rtsp");  // RTSP 实时流不做墙钟节流
-  // 实时节流：按源帧率回放，保证输出时长正确、稳定性测试运行满指定时长。
-  // 解码硬件远快于实时，不节流会导致文件在数秒内跑完、大量丢帧、输出时长错误。
+  const bool is_rtsp = (cfg.source_type == "rtsp");
+  // 文件模式：基于序列号抽帧
+  const int output_step = is_rtsp ? 1 : (cfg.source_fps / cfg.output_fps);
+  // 文件模式：按源帧率回放节流
   const int64_t frame_interval_ms = 1000 / cfg.source_fps;
   const int64_t pace_start_ms = now_ms();
+  // RTSP 模式：墙钟时间调度
+  const int64_t output_interval_ms = 1000 / cfg.output_fps;
+  int prev_epoch = -1;
   VideoFrame vf;
   std::string err;
   while (!stop_.load()) {
@@ -229,15 +267,33 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
     }
     metrics_.decoded_frames.fetch_add(1);
     metrics_.read_frames.store(source_.packets_read());
-    // 实时节流：本地文件需按源帧率回放；RTSP 实时流由网络按真实速率到达，不节流。
+
     if (!is_rtsp) {
+      // 文件模式：按源帧率回放节流
       const int64_t expected_ms = pace_start_ms + vf.sequence * frame_interval_ms;
       const int64_t actual_ms = now_ms();
       if (actual_ms < expected_ms) {
         std::this_thread::sleep_for(std::chrono::milliseconds(expected_ms - actual_ms));
       }
     }
-    if (vf.sequence % output_step == 0) {
+
+    // RTSP 重连后重置调度（epoch 变化）
+    if (is_rtsp && vf.source_epoch != prev_epoch) {
+      prev_epoch = vf.source_epoch;
+      last_output_ms_ = 0;  // 重连后立即输出第一帧
+    }
+
+    bool should_output;
+    if (is_rtsp) {
+      // 墙钟时间调度：每 output_interval_ms 最多输出一个最新帧
+      const int64_t t = now_ms();
+      should_output = (last_output_ms_ == 0) || (t - last_output_ms_ >= output_interval_ms);
+      if (should_output) last_output_ms_ = t;
+    } else {
+      should_output = (vf.sequence % output_step == 0);
+    }
+
+    if (should_output) {
       metrics_.queued_frames.fetch_add(1);
       q_decode_->push(std::move(vf));
       vf.frame = nullptr;
@@ -248,17 +304,15 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
 }
 
 void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
-  const int infer_step = cfg.source_fps / cfg.inference_fps;
+  const bool is_rtsp = (cfg.source_type == "rtsp");
+  const int infer_step = is_rtsp ? 1 : (cfg.source_fps / cfg.inference_fps);
+  const int64_t infer_interval_ms = 1000 / cfg.inference_fps;
   const int input_size = 640;
   const bool cpu_draw = (cfg.draw_mode == "cpu");
   const bool bmcv_draw = (cfg.draw_mode == "bmcv");
   const bool cpu_pre = (cfg.preprocess == "cpu");
   const bool bmcv_pre = (cfg.preprocess == "bmcv" && bmcv_.ready());
 
-  // sws 上下文按需创建：
-  //   nv12_to_rgb   / rgb_to_nv12 ：仅 CPU 绘制路径需要（NV12<->RGB 往返）。
-  //   nv12_to_rgb640              ：仅 CPU 预处理路径需要（NV12->RGB640 缩放）。
-  // BMCV 路径不创建 sws 上下文（CSC 由 BMCV storage_convert 完成，绘制由 BMCV draw_rectangle 完成）。
   SwsContext* nv12_to_rgb = nullptr;
   SwsContext* rgb_to_nv12 = nullptr;
   SwsContext* nv12_to_rgb640 = nullptr;
@@ -276,12 +330,12 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
         640, 640, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
   }
 
-  Image rgb;          // 960x544 RGB，仅 CPU 绘制路径使用
+  Image rgb;
   if (cpu_draw) {
     rgb.width = source_w_; rgb.height = source_h_;
     rgb.data.assign(static_cast<size_t>(source_w_) * source_h_ * 3, 0);
   }
-  Image rgb640;       // 640x640 RGB，仅 CPU 预处理路径使用
+  Image rgb640;
   if (cpu_pre) {
     rgb640.width = 640; rgb640.height = 640;
     rgb640.data.assign(static_cast<size_t>(640) * 640 * 3, 0);
@@ -295,15 +349,25 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   VideoFrame vf;
   while (!stop_.load() && q_decode_->pop(vf)) {
     if (!vf.frame) continue;
-    // 源 epoch 变化（RTSP 重连）：清除过期检测结果，避免旧框粘贴到新连接的帧。
+    // 源 epoch 变化（RTSP 重连）：清除过期检测结果，重置推理调度。
     if (vf.source_epoch != last_epoch_) {
       snapshot_.clear();
       last_epoch_ = vf.source_epoch;
+      last_infer_ms_ = 0;  // 重连后立即推理
     }
     const int64_t proc_start = now_ms();
     AVFrame* f = vf.frame;
 
-    const bool is_infer = (vf.sequence % infer_step == 0);
+    // 推理调度：文件模式基于序列号；RTSP 模式基于墙钟时间。
+    bool is_infer;
+    if (is_rtsp) {
+      const int64_t t = now_ms();
+      is_infer = (last_infer_ms_ == 0) || (t - last_infer_ms_ >= infer_interval_ms);
+      if (is_infer) last_infer_ms_ = t;
+    } else {
+      is_infer = (vf.sequence % infer_step == 0);
+    }
+
     if (is_infer) {
       int64_t t0 = now_ms();
       bool pre_ok = false;
@@ -314,7 +378,6 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           set_error(9, "BMCV 预处理失败: " + berr);
         }
       } else {
-        // CPU 预处理：NV12 -> RGB(640x640) sws 缩放 + 归一化
         const uint8_t* src[2] = {f->data[0], f->data[1]};
         const int src_stride[2] = {f->linesize[0], f->linesize[1]};
         uint8_t* dst640[1] = {rgb640.data.data()};
@@ -330,6 +393,10 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           postprocess_yolov7(output.data(), num_boxes, num_vals, source_w_, source_h_,
                              input_size, cfg.conf, cfg.iou, dets);
           int64_t t3 = now_ms();
+          // 禁区过滤：NMS 后、绘框前
+          if (region_filter_.enabled()) {
+            region_filter_.filter(dets);
+          }
           metrics_.record_pre_ms(ms_between(t0, t1));
           metrics_.record_infer_ms(ms_between(t1, t2));
           metrics_.record_post_ms(ms_between(t2, t3));
@@ -351,7 +418,6 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     DetectionSnapshot snap = snapshot_.get();
     const bool has_draw = !snap.expired(proc_start, cfg.result_ttl_ms) && !snap.detections.empty();
     if (cpu_draw) {
-      // CPU 绘制：NV12 -> RGB -> 绘框 -> RGB -> NV12（往返约 132ms，板端 sws 无 SIMD）
       const uint8_t* src[2] = {f->data[0], f->data[1]};
       const int src_stride[2] = {f->linesize[0], f->linesize[1]};
       uint8_t* dst960[1] = {rgb.data.data()};
@@ -373,12 +439,10 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       const int d2_stride[2] = {f->linesize[0], f->linesize[1]};
       sws_scale(rgb_to_nv12, s2, s2_stride, 0, source_h_, d2, d2_stride);
     } else if (bmcv_draw && has_draw) {
-      // BMCV 绘制：直接在 NV12 bm_image 上绘制矩形（H2D+draw+D2H 约 6ms）
       if (!bmcv_.draw_rectangles(f, snap.detections, berr)) {
         set_error(10, "BMCV 绘制失败: " + berr);
       }
     }
-    // draw_mode == "none"：跳过绘制
 
     const int64_t e2e = now_ms() - vf.capture_time_ms;
     metrics_.record_e2e_ms(static_cast<double>(e2e));
@@ -392,6 +456,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   if (nv12_to_rgb640) sws_freeContext(nv12_to_rgb640);
   if (rgb_to_nv12) sws_freeContext(rgb_to_nv12);
 }
+
 void SingleStreamPipeline::encode_loop(const PipelineConfig& cfg) {
   VideoFrame vf;
   std::string err;
@@ -418,7 +483,6 @@ void SingleStreamPipeline::metrics_loop(const PipelineConfig& cfg) {
     metrics_.set_queue_length(static_cast<int>(q_decode_->size() + q_encode_->size()));
     std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
     std::fflush(stdout);
-    // max_seconds 限时停止（稳定性测试用）
     if (cfg.max_seconds > 0 && (now_ms() - start_ms_) / 1000 >= cfg.max_seconds) {
       std::fprintf(stdout, "信息 | 限时 | 达到 %d 秒，主动停止\n", cfg.max_seconds);
       std::fflush(stdout);

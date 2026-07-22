@@ -55,6 +55,8 @@ add_library(hzw_inf STATIC
   src/video/sophon_ffmpeg_sink.cpp
   src/video/rtsp_source_options.cpp
   src/video/bmcv_processor.cpp
+  src/video/detection_region_filter.cpp
+  src/config/stream_profile.cpp
   src/monitoring/pipeline_metrics.cpp
   src/pipeline/single_stream_pipeline.cpp)
 target_include_directories(hzw_inf PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
@@ -71,6 +73,10 @@ target_link_libraries(single_video_infer PRIVATE hzw_inf)
 # CPU/BMCV 预处理正确性对照工具
 add_executable(preprocess_compare tools/video_inference/preprocess_compare.cpp)
 target_link_libraries(preprocess_compare PRIVATE hzw_inf)
+
+# 阶段4.3 视频流探测工具
+add_executable(video_stream_probe tools/video_inference/video_stream_probe.cpp)
+target_link_libraries(video_stream_probe PRIVATE hzw_inf)
 
 # YOLOv7 后处理单元测试
 enable_testing()
@@ -104,6 +110,27 @@ add_test(NAME rtsp_source_options COMMAND test_rtsp_source_options)
 add_executable(test_output_pts tests/unit_cpp/test_output_pts.cpp)
 target_link_libraries(test_output_pts PRIVATE hzw_inf)
 add_test(NAME output_pts COMMAND test_output_pts)
+
+
+# 阶段4.3 RTMP 退避策略单元测试（纯逻辑，无需硬件）
+add_executable(test_rtmp_backoff tests/unit_cpp/test_rtmp_backoff.cpp)
+target_link_libraries(test_rtmp_backoff PRIVATE hzw_inf)
+add_test(NAME rtmp_backoff COMMAND test_rtmp_backoff)
+
+# 阶段4.3 禁区过滤单元测试（纯逻辑，无需硬件）
+add_executable(test_detection_region_filter tests/unit_cpp/test_detection_region_filter.cpp)
+target_link_libraries(test_detection_region_filter PRIVATE hzw_inf)
+add_test(NAME detection_region_filter COMMAND test_detection_region_filter)
+
+# 阶段4.3 时间调度单元测试（纯逻辑，无需硬件）
+add_executable(test_time_scheduling tests/unit_cpp/test_time_scheduling.cpp)
+target_link_libraries(test_time_scheduling PRIVATE hzw_inf)
+add_test(NAME time_scheduling COMMAND test_time_scheduling)
+
+# 阶段4.3 StreamProfile 解析单元测试（纯逻辑，无需硬件）
+add_executable(test_stream_profile tests/unit_cpp/test_stream_profile.cpp)
+target_link_libraries(test_stream_profile PRIVATE hzw_inf)
+add_test(NAME stream_profile COMMAND test_stream_profile)
 
 # 稳定性测试脚本行为验证
 add_test(NAME stability_script COMMAND bash ${CMAKE_SOURCE_DIR}/tests/test_stability_script.sh)

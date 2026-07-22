@@ -2,8 +2,8 @@
 // =============================================================================
 // 阶段4 单路视频硬件推理 CLI。
 //
-// 链路：本地 mp4 -> h264_bm 硬解 -> 容量1丢旧队列 -> 间隔推理(复用snapshot) -> 绘框
-//       -> in-place 写回 NV12 -> h264_bm 硬编 -> 本地输出文件。
+// 链路：本地 mp4/RTSP -> h264_bm 硬解 -> 容量1丢旧队列 -> 间隔推理(复用snapshot) -> 绘框
+//       -> in-place 写回 NV12 -> h264_bm 硬编 -> 本地文件/RTMP 输出。
 //
 // 用法见 tools/video_inference/README.md。响应 SIGINT/SIGTERM 优雅退出。
 // =============================================================================
@@ -58,12 +58,14 @@ struct Args {
   std::string preprocess = "cpu";
   std::string draw_mode = "cpu";
   std::string source_type = "file";     // file | rtsp
-  std::string input_env;                  // RTSP: 环境变量名
+  std::string input_env;                  // RTSP: 环境变量名（可选）
   std::string rtsp_transport = "tcp";
   int64_t rtsp_stimeout_us = 5000000;
   int rtsp_max_reconnect = -1;
   int64_t rtsp_initial_backoff_ms = 1000;
   int64_t rtsp_max_backoff_ms = 30000;
+  std::string sink_type = "file";        // file | rtmp
+  std::string stream_id;
   bool help = false;
 };
 
@@ -103,6 +105,8 @@ bool parse(int argc, char** argv, Args& a, std::string& err) {
     else if (k == "--rtsp-max-reconnect") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_max_reconnect = std::atoi(v); }
     else if (k == "--rtsp-initial-backoff-ms") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_initial_backoff_ms = std::strtoll(v, nullptr, 10); }
     else if (k == "--rtsp-max-backoff-ms") { v = get(k.c_str(), i); if (!v) return false; a.rtsp_max_backoff_ms = std::strtoll(v, nullptr, 10); }
+    else if (k == "--sink-type") { v = get(k.c_str(), i); if (v) a.sink_type = v; else return false; }
+    else if (k == "--stream-id") { v = get(k.c_str(), i); if (v) a.stream_id = v; else return false; }
     else { err = "未知参数: " + k; return false; }
   }
   return true;
@@ -110,16 +114,17 @@ bool parse(int argc, char** argv, Args& a, std::string& err) {
 
 void usage() {
   std::fprintf(stdout,
-      "用法: single_video_infer --input <mp4> --output <mp4|ts|h264> --bmodel <bmodel>\n"
+      "用法: single_video_infer --input <mp4|rtsp-url> --output <mp4|ts|h264|rtmp-url> --bmodel <bmodel>\n"
       "  --device 0 --decoder h264_bm --encoder h264_bm\n"
       "  --source-fps 20 --output-fps 10 --inference-fps 5\n"
       "  --bitrate-kbps 800 --gop 20 --queue-size 1\n"
       "  --conf 0.1 --iou 0.1 --result-ttl-ms 1000\n"
       "  --loop 1 (0=无限) --max-seconds 0 (0=不限时) --metrics-interval 10\n"
       "  --preprocess cpu|bmcv --draw-mode cpu|bmcv|none\n"
-      "  --source-type file|rtsp --input-env <NAME>  (RTSP: URL 仅从环境变量读取)\n"
+      "  --source-type file|rtsp --input-env <NAME>  (RTSP: URL 可直接用 --input 或从环境变量读取)\n"
       "  --rtsp-transport tcp|udp --rtsp-stimeout-us 5000000\n"
-      "  --rtsp-max-reconnect -1 --rtsp-initial-backoff-ms 1000 --rtsp-max-backoff-ms 30000\n");
+      "  --rtsp-max-reconnect -1 --rtsp-initial-backoff-ms 1000 --rtsp-max-backoff-ms 30000\n"
+      "  --sink-type file|rtmp --stream-id <A|B>\n");
 }
 }  // namespace
 
@@ -174,6 +179,8 @@ int main(int argc, char** argv) {
   cfg.rtsp_max_reconnect = a.rtsp_max_reconnect;
   cfg.rtsp_initial_backoff_ms = a.rtsp_initial_backoff_ms;
   cfg.rtsp_max_backoff_ms = a.rtsp_max_backoff_ms;
+  cfg.sink_type = a.sink_type;
+  cfg.stream_id = a.stream_id;
 
   ensure_dir(cfg.output_path);
 
