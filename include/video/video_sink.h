@@ -15,6 +15,8 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <atomic>
+#include <mutex>
 #include "video/ffmpeg_compat.h"
 #include "video/video_frame.h"
 
@@ -47,6 +49,16 @@ class RtmpBackoffPolicy {
   int64_t last_backoff_ms_ = 0;
 };
 
+// RTMP 重连动作决策（纯逻辑，可独立单元测试，不依赖网络/硬件/FFmpeg 对象）：
+//   普通网络写失败/连接断开 -> 仅重建 muxer/AVIO，保留硬件编码器；
+//   编码器 ENOMEM 或编码器未打开 -> 升级 DEVICE_RESOURCE_FATAL，停止双路并非零退出。
+// send_frame_err 为 avcodec_send_frame 返回码（0/负值）；encoder_open 表示编码器是否可用。
+enum class RtmpReconnectAction {
+  REBUILD_MUXER_ONLY,  // 网络层断开：仅重建 FLV muxer + RTMP AVIO
+  ESCALATE_FATAL,      // 编码器/设备资源致命：停止并退出
+};
+RtmpReconnectAction decide_rtmp_reconnect(int send_frame_err, bool encoder_open);
+
 class SophonVideoSink {
  public:
   SophonVideoSink() = default;
@@ -78,12 +90,22 @@ class SophonVideoSink {
   std::string sink_type() const { return sink_type_; }
   int rtmp_reconnect_count() const { return rtmp_reconnect_count_; }
 
+  // 设备资源致命（编码器 ENOMEM 或初始化失败）。致命后管线必须停止双路并非零退出。
+  bool resource_fatal() const { return resource_fatal_.load(); }
+  std::string fatal_reason() const;
+
+  // 测试钩子：强制一次“仅重建 muxer”的重连（复用现有编码器），供板端工具压测。
+  // 需先 open() 成功；url 为 RTMP 地址。返回 false 表示停止或资源致命。
+  bool simulate_rtmp_reconnect(const std::string& url, std::string& err);
+
  private:
   bool open_encoder(int width, int height, int fps, int bitrate_kbps, int gop,
                     int device, const std::string& encoder_name, std::string& err);
   bool open_file_muxer(const std::string& path, std::string& err);
   bool open_rtmp_muxer(const std::string& url, std::string& err);
-  // 关闭并释放当前 muxer 与编码器（保留重连所需参数）。
+  // 仅释放 muxer 与 AVIO（保留编码器），用于 RTMP 网络重连。
+  void teardown_muxer();
+  // 释放 muxer 与编码器（用于 close / 资源致命）。
   void teardown_muxer_encoder();
   // RTMP 重连：退避 -> 重建编码器 -> 重建 FLV muxer -> 重开 RTMP -> 重写 header。
   // 成功后重置 PTS。返回 false 表示停止或不可恢复。
@@ -91,6 +113,7 @@ class SophonVideoSink {
   // 可被停止中断的睡眠。
   void sleep_interruptible(int64_t ms);
   void drain_packets(std::string& err);
+  void mark_resource_fatal(const std::string& reason);
 
   AVFormatContext* mux_ = nullptr;      // 输出封装上下文
   AVCodecContext* enc_ = nullptr;       // h264_bm 编码器
@@ -116,6 +139,11 @@ class SophonVideoSink {
   int saved_gop_ = 0;
   int saved_device_ = 0;
   std::string saved_encoder_name_;
+
+  // 资源致命状态
+  std::atomic<bool> resource_fatal_{false};
+  mutable std::mutex fatal_mutex_;
+  std::string fatal_reason_;
 };
 
 }  // namespace hzw

@@ -75,6 +75,7 @@ hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
   pc.bitrate_kbps = sc.bitrate_kbps;
   pc.gop = sc.gop;
   pc.queue_size = app_cfg.frame_queue_size;
+  pc.extra_frame_buffer_num = app_cfg.extra_frame_buffer_num;
   pc.conf = sc.conf;
   pc.iou = sc.iou;
   pc.result_ttl_ms = sc.result_ttl_ms;

@@ -65,7 +65,13 @@ void DualStreamApplication::stream_thread(const PipelineConfig& cfg,
     std::fflush(stderr);
     exit_code.store(99);
   }
-  // 任一路结束不直接杀死另一路；由 metrics_loop 的超时或信号统一停止。
+  // 资源致命（退出码 70）：立即停止双路，禁止错误风暴，进程非零退出。
+  if (exit_code.load() == 70) {
+    std::fprintf(stderr, "致命 | 双路 | [%s] 设备资源致命，停止双路\n", cfg.stream_id.c_str());
+    std::fflush(stderr);
+    request_stop();
+  }
+  // 普通错误不直接杀死另一路；由 metrics_loop 的超时或信号统一停止。
 }
 
 int DualStreamApplication::run(const DualStreamConfig& cfg) {
@@ -119,8 +125,12 @@ int DualStreamApplication::run(const DualStreamConfig& cfg) {
   int rc_a = exit_code_a_.load();
   int rc_b = exit_code_b_.load();
   int rc = 0;
-  if (cfg.run_a && rc_a != 0) rc = 1;
-  if (cfg.run_b && rc_b != 0) rc = 1;
+  if (cfg.run_a && rc_a == 70) rc = 70;
+  if (cfg.run_b && rc_b == 70) rc = 70;
+  if (rc != 70) {
+    if (cfg.run_a && rc_a != 0) rc = 1;
+    if (cfg.run_b && rc_b != 0) rc = 1;
+  }
   std::fprintf(stdout, "信息 | 双路 | 结束 A退出码=%d B退出码=%d 耗时=%llds\n",
                rc_a, rc_b, static_cast<long long>((now_ms() - start_ms_) / 1000));
   std::fflush(stdout);

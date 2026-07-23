@@ -447,6 +447,7 @@ bool ApplicationConfig::from_yaml(const YamlValue& root, std::string& err) {
     frame_queue_size = rt->get_int("frame_queue_size", frame_queue_size);
     reconnect_initial_seconds = rt->get_int("reconnect_initial_seconds", reconnect_initial_seconds);
     reconnect_max_seconds = rt->get_int("reconnect_max_seconds", reconnect_max_seconds);
+    extra_frame_buffer_num = rt->get_int("extra_frame_buffer_num", extra_frame_buffer_num);
   }
   // health
   const YamlValue* hlth = root.find("health");
@@ -514,6 +515,10 @@ bool ApplicationConfig::validate(std::string& err) const {
     return false;
   }
 
+  if (extra_frame_buffer_num < 1) {
+    err = "extra_frame_buffer_num 至少为 1";
+    return false;
+  }
   for (const auto& s : streams) {
     if (!s.enabled) continue;
     if (s.id.empty()) { err = "stream id 为空"; return false; }

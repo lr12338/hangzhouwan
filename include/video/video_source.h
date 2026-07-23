@@ -21,6 +21,8 @@
 #include "video/ffmpeg_compat.h"
 #include "video/rtsp_source_options.h"
 #include "video/video_frame.h"
+#include "video/inflight_frame_tracker.h"
+#include <mutex>
 
 namespace hzw {
 
@@ -49,9 +51,13 @@ class SophonVideoSource {
   // 请求停止：设置中断标志，使阻塞中的 open/read 尽快返回（信号/限时调用）。
   void request_stop() { stop_requested_.store(true); }
 
-  // 读取一帧到 vf（所有权转移给调用者，需 vf.release()）。
-  // 返回 false 表示 EOF（本地文件且 loop 已用尽）、停止请求或不可恢复错误；err 给出原因。
-  // RTSP 模式下：read 内部按退避策略自动重连，仅在停止或重连次数耗尽时返回 false。
+  // 读取一帧到 vf（所有权转移给调用者，需 vf.release()）。每帧的 frame_tracker_ 指向
+  // 源在途计数器，release() 时递减。返回 false 时 err 给出原因：
+  //   "EOF"           本地文件且 loop 已用尽
+  //   "停止"           信号/限时主动停止
+  //   "RTSP_RECONNECT" RTSP 断流，需由调用方（管线）清空缓冲、等待在途帧归零后再调
+  //                    reconnect_rtsp()；read 自身不再重建解码器（避免在途帧未释放即关闭解码器）。
+  //   其它            不可恢复错误（含 DEVICE_RESOURCE_FATAL：VPU/解码器资源耗尽）。
   bool read(VideoFrame& vf, std::string& err);
 
   int width() const { return width_; }
@@ -66,6 +72,26 @@ class SophonVideoSource {
   // 源 epoch：每次（重）连接成功后 +1；帧携带该值，用于检测重连并清除过期检测结果。
   int source_epoch() const { return source_epoch_; }
 
+  // 在途 AVFrame 数（已 produce 未 release）。重连关闭旧解码器前必须等待其归零。
+  int outstanding_avframes() const { return inflight_.count(); }
+  // 阻塞等待在途帧归零；超时返回 false（未归零，禁止关闭解码器）。
+  bool wait_avframes_drained(int timeout_ms) const { return inflight_.wait_drained(timeout_ms); }
+
+  // 设备资源致命（VPU/解码器 ENOMEM 或初始化失败）。致命后管线必须停止双路并非零退出。
+  bool resource_fatal() const { return resource_fatal_.load(); }
+  std::string fatal_reason() const;
+
+  // RTSP 受控重连（由管线在清空缓冲、等待在途帧归零后调用）：
+  //   退避循环 -> 关闭旧解码器（仅在 outstanding_avframes()==0 时，否则升级致命）->
+  //   重开 RTSP 输入 -> 重开解码器。成功后 epoch+1。
+  // 不重新加载 bmodel，不触碰 RTMP/编码器。返回 false 表示停止、重连耗尽或资源致命。
+  bool reconnect_rtsp(std::string& err);
+
+  // 测试钩子：对当前源（文件或 RTSP）执行一次与重连等价的解码器换建
+  // （等待在途帧归零 -> 关闭旧解码器 -> 重开输入 -> 重开解码器，epoch+1）。
+  // 仅供板端 forced-reconnect 工具压测解码器生命周期，生产路径不调用。
+  bool simulate_reconnect(std::string& err);
+
   void close();
 
  private:
@@ -73,12 +99,16 @@ class SophonVideoSource {
   // find_stream_info + 定位视频流 + 读取宽高/帧率/time_base。opts 由调用方构造（可空）。
   bool open_input(const std::string& url, AVDictionary** opts_ptr, std::string& err);
   bool open_decoder(const std::string& decoder_name, std::string& err);
+  // 关闭解码器：硬性断言 outstanding_avframes()==0，未归零则升级 DEVICE_RESOURCE_FATAL
+  // 并拒绝关闭（避免泄漏仍被在途帧引用的 bm_image 设备内存）。
   void close_decoder();
   bool seek_to_start(std::string& err);
-  // 关闭当前输入并重新打开 RTSP（不含退避等待）。成功返回 true 并更新 epoch/reconnect_count。
-  bool try_reopen_rtsp(std::string& err);
-  // 受控重连：循环 退避等待 -> try_reopen_rtsp，受 stop 与 max_reconnect_attempts 约束。
-  bool reconnect(std::string& err);
+  // 单次重开：关闭旧解码器（受在途帧保护）-> 关闭旧输入 -> 重开输入 -> 重开解码器。
+  // 成功返回 true 并更新 epoch/reconnect_count。失败时已释放半初始化上下文。
+  bool try_reopen(const std::string& url, const std::string& decoder_name,
+                  AVDictionary** opts_ptr, std::string& err);
+  // 标记设备资源致命（VPU/解码器 ENOMEM 或初始化失败）。
+  void mark_resource_fatal(const std::string& reason);
   // 可被停止中断的睡眠（按 50ms 片段轮询 stop_requested_）。
   void sleep_interruptible(int64_t ms);
   static int interrupt_cb(void* opaque);
@@ -96,6 +126,7 @@ class SophonVideoSource {
   int loops_completed_ = 0;
   int device_ = 0;
   int extra_frame_buffer_num_ = 20;
+  std::string decoder_name_ = "h264_bm";
   std::string path_;
 
   // RTSP 状态
@@ -106,6 +137,12 @@ class SophonVideoSource {
   int reconnect_count_ = 0;
   int source_epoch_ = 0;
   std::string rtsp_url_;           // 仅内存，禁止打印
+
+  // 资源生命周期状态
+  InflightFrameTracker inflight_;            // 在途 AVFrame 计数（produce/release 配对）
+  std::atomic<bool> resource_fatal_{false};  // 设备资源致命标志
+  mutable std::mutex fatal_mutex_;
+  std::string fatal_reason_;
 };
 
 }  // namespace hzw

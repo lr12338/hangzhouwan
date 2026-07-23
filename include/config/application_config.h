@@ -115,6 +115,7 @@ struct ApplicationConfig {
   int frame_queue_size = 1;
   int reconnect_initial_seconds = 2;
   int reconnect_max_seconds = 30;
+  int extra_frame_buffer_num = 20;  // 解码输出缓冲池大小（重连稳定性关键参数）
   std::string decoder = "h264_bm";
   std::string encoder = "h264_bm";
   std::string preprocess = "bmcv";

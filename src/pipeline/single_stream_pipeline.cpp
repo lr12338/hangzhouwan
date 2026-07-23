@@ -90,6 +90,7 @@ bool PipelineConfig::validate(std::string& err) const {
   if (iou < 0.0f || iou > 1.0f) { err = "iou 越界"; return false; }
   if (bitrate_kbps <= 0) { err = "bitrate_kbps 非法"; return false; }
   if (gop <= 0) { err = "gop 非法"; return false; }
+  if (extra_frame_buffer_num < 1) { err = "extra_frame_buffer_num 至少为 1"; return false; }
   if (result_ttl_ms < 0) { err = "result_ttl_ms 非法"; return false; }
   if (device < 0) { err = "device 非法"; return false; }
   if (preprocess != "cpu" && preprocess != "bmcv") {
@@ -129,6 +130,54 @@ void SingleStreamPipeline::set_error(int code, const std::string& msg) {
     std::fflush(stderr);
   }
   request_stop();
+}
+
+void SingleStreamPipeline::set_resource_fatal(const std::string& msg) {
+  // 资源致命强制覆盖退出码为 70 并停止（资源熔断）。
+  exit_code_.store(70);
+  std::fprintf(stderr, "致命 | 管线 | DEVICE_RESOURCE_FATAL: %s\n", msg.c_str());
+  std::fflush(stderr);
+  request_stop();
+}
+
+bool SingleStreamPipeline::resource_fatal() const {
+  return source_.resource_fatal() || sink_.resource_fatal();
+}
+
+std::string SingleStreamPipeline::fatal_reason() const {
+  if (source_.resource_fatal()) return std::string("source: ") + source_.fatal_reason();
+  if (sink_.resource_fatal()) return std::string("sink: ") + sink_.fatal_reason();
+  return "";
+}
+
+void SingleStreamPipeline::drain_jitter_locked() {
+  std::lock_guard<std::mutex> lk(jitter_mutex_);
+  while (!jitter_buf_.empty()) {
+    jitter_buf_.front().release();
+    jitter_buf_.pop_front();
+  }
+}
+
+bool SingleStreamPipeline::coordinate_rtsp_reconnect(const PipelineConfig& cfg,
+                                                     std::string& err) {
+  // 1. 停止产生新帧：rtsp_draining_ 让 decode_loop 跳过输出节流，快速排空 jitter。
+  rtsp_draining_.store(true);
+  // 2. 清空 jitter 队列（释放旧 epoch 帧 -> 在途计数递减）。
+  drain_jitter_locked();
+  // 3. 清空 decode/encode 队列，缩短排空路径。
+  if (q_decode_) q_decode_->drain();
+  if (q_encode_) q_encode_->drain();
+  // 4. 等待在途 AVFrame 全部释放（process/encode 线程释放其手中帧）。
+  if (!source_.wait_avframes_drained(cfg.rtsp_drain_timeout_ms)) {
+    rtsp_draining_.store(false);
+    err = "在途帧未归零（" + std::to_string(source_.outstanding_avframes()) +
+          "），禁止关闭解码器以防 VPU 显存泄漏";
+    return false;
+  }
+  // 5. 关闭旧解码器并重开（源内部受在途帧保护：未归零则升级致命）。
+  bool ok = source_.reconnect_rtsp(err);
+  rtsp_draining_.store(false);
+  return ok;
 }
 
 void SingleStreamPipeline::request_stop() {
@@ -177,15 +226,15 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     ro.max_reconnect_attempts = cfg_.rtsp_max_reconnect;
     ro.initial_backoff_ms = cfg_.rtsp_initial_backoff_ms;
     ro.max_backoff_ms = cfg_.rtsp_max_backoff_ms;
-    if (!source_.open_rtsp(url, cfg_.device, 20, cfg_.decoder, ro, err)) {
+    if (!source_.open_rtsp(url, cfg_.device, cfg_.extra_frame_buffer_num, cfg_.decoder, ro, err)) {
       std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
-      return 3;
+      return source_.resource_fatal() ? 70 : 3;
     }
   } else {
     source_.set_loop(cfg_.loop);
-    if (!source_.open(cfg_.input_path, cfg_.device, 20, cfg_.decoder, err)) {
+    if (!source_.open(cfg_.input_path, cfg_.device, cfg_.extra_frame_buffer_num, cfg_.decoder, err)) {
       std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
-      return 3;
+      return source_.resource_fatal() ? 70 : 3;
     }
   }
   source_w_ = source_.width();
@@ -229,7 +278,7 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
                   cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder,
                   cfg_.sink_type, err)) {
     std::fprintf(stderr, "错误 | 视频输出 | %s\n", err.c_str());
-    return 5;
+    return sink_.resource_fatal() ? 70 : 5;
   }
 
   // 业务增强初始化
@@ -277,8 +326,15 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   stop_.store(true);
   t_metrics_.join();
 
+  // 释放残留帧（jitter/队列），确保在途计数归零后再关闭解码器，避免 VPU 显存泄漏。
+  drain_jitter_locked();
+  if (q_decode_) q_decode_->drain();
+  if (q_encode_) q_encode_->drain();
+
   metrics_.rtsp_reconnects.store(source_.reconnect_count());
   metrics_.rtmp_reconnects.store(sink_.rtmp_reconnect_count());
+
+  if (resource_fatal() && exit_code_.load() != 70) exit_code_.store(70);
 
   sink_.close();
   source_.close();
@@ -309,11 +365,23 @@ void SingleStreamPipeline::capture_loop(const PipelineConfig& cfg) {
         std::fprintf(stdout, "信息 | 解码 | 正常 EOF，循环完成 %d 轮\n",
                      source_.loops_completed());
         std::fflush(stdout);
-      } else if (err == "停止") {
-        // 信号/限时主动停止
-      } else {
-        set_error(6, "解码失败: " + err);
+        break;
       }
+      if (err == "停止") {
+        break;  // 信号/限时主动停止
+      }
+      if (err == "RTSP_RECONNECT") {
+        // 重连协调：停止产生新帧 -> 清空 jitter/decode/encode -> 等待在途帧归零 -> 源重连
+        std::string e2;
+        if (!coordinate_rtsp_reconnect(cfg, e2)) {
+          if (source_.resource_fatal()) set_resource_fatal("RTSP重连资源致命: " + e2);
+          else set_error(6, "RTSP重连失败: " + e2);
+          break;
+        }
+        continue;  // 重连成功，在新连接上继续读取
+      }
+      if (source_.resource_fatal()) { set_resource_fatal("解码资源致命: " + err); break; }
+      set_error(6, "解码失败: " + err);
       break;
     }
     metrics_.read_success.fetch_add(1);
@@ -370,8 +438,9 @@ void SingleStreamPipeline::decode_loop(const PipelineConfig& cfg) {
   while (!stop_.load()) {
     if (is_rtsp) {
       const int64_t t = now_ms();
+      const bool draining = rtsp_draining_.load();
       const bool should_output =
-          (last_output_ms_ == 0) || (t - last_output_ms_ >= output_interval_ms);
+          draining || (last_output_ms_ == 0) || (t - last_output_ms_ >= output_interval_ms);
       if (!should_output) {
         int64_t wait = output_interval_ms - (t - last_output_ms_);
         if (wait > 10) wait = 10;
@@ -740,7 +809,8 @@ void SingleStreamPipeline::encode_loop(const PipelineConfig& cfg) {
     int64_t t0 = now_ms();
     if (!sink_.write(vf, err)) {
       metrics_.rtmp_write_fail.fetch_add(1);
-      set_error(8, "编码失败: " + err);
+      if (sink_.resource_fatal()) set_resource_fatal("编码资源致命: " + err);
+      else set_error(8, "编码失败: " + err);
       vf.release();
       break;
     }

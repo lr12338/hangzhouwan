@@ -36,6 +36,10 @@ sudo chown -R "$(id -u):$(id -g)" "$RELEASE_DIR"
 # 3. 复制二进制
 echo "[3/7] 复制二进制..."
 cp "$REPO_ROOT/build/dual_stream_app" "$RELEASE_DIR/bin/"
+# 板端 forced-reconnect/VPU 复现工具（维护窗口用）
+if [ -f "$REPO_ROOT/build/forced_reconnect_tool" ]; then
+  cp "$REPO_ROOT/build/forced_reconnect_tool" "$RELEASE_DIR/bin/"
+fi
 # hzwctl（优先使用已构建版本，回退到 Python 脚本）
 if [ -f "$REPO_ROOT/build/hzwctl" ]; then
   cp "$REPO_ROOT/build/hzwctl" "$RELEASE_DIR/bin/"

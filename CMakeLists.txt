@@ -145,6 +145,21 @@ add_executable(test_stream_profile tests/unit_cpp/test_stream_profile.cpp)
 target_link_libraries(test_stream_profile PRIVATE hzw_inf)
 add_test(NAME stream_profile COMMAND test_stream_profile)
 
+
+# 阶段4.5 VPU 重连资源生命周期单元测试（纯逻辑，无需硬件）
+add_executable(test_inflight_frame_tracker tests/unit_cpp/test_inflight_frame_tracker.cpp)
+target_link_libraries(test_inflight_frame_tracker PRIVATE hzw_inf Threads::Threads)
+add_test(NAME inflight_frame_tracker COMMAND test_inflight_frame_tracker)
+
+# RTMP 重连决策单元测试（纯逻辑，无需硬件）
+add_executable(test_rtmp_reconnect_decision tests/unit_cpp/test_rtmp_reconnect_decision.cpp)
+target_link_libraries(test_rtmp_reconnect_decision PRIVATE hzw_inf)
+add_test(NAME rtmp_reconnect_decision COMMAND test_rtmp_reconnect_decision)
+
+# 板端 forced-reconnect / VPU 显存泄漏复现工具（需 BM1684 硬件，不纳入 CTest 自动跑）
+add_executable(forced_reconnect_tool tools/dual_stream/forced_reconnect_tool.cpp)
+target_link_libraries(forced_reconnect_tool PRIVATE hzw_inf)
+
 # 稳定性测试脚本行为验证
 add_test(NAME stability_script COMMAND bash ${CMAKE_SOURCE_DIR}/tests/test_stability_script.sh)
 

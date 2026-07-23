@@ -11,6 +11,13 @@
 
 namespace hzw {
 
+// ---- RTMP 重连动作决策（纯逻辑）----
+RtmpReconnectAction decide_rtmp_reconnect(int send_frame_err, bool encoder_open) {
+  if (!encoder_open) return RtmpReconnectAction::ESCALATE_FATAL;
+  if (send_frame_err == AVERROR(ENOMEM)) return RtmpReconnectAction::ESCALATE_FATAL;
+  return RtmpReconnectAction::REBUILD_MUXER_ONLY;
+}
+
 // ---- RtmpBackoffPolicy ----
 // 固定序列：1s, 2s, 5s, 10s，之后封顶 30s。
 int64_t RtmpBackoffPolicy::on_failure() {
@@ -33,6 +40,21 @@ void RtmpBackoffPolicy::on_success() {
 
 // ---- SophonVideoSink ----
 SophonVideoSink::~SophonVideoSink() { close(); }
+
+void SophonVideoSink::mark_resource_fatal(const std::string& reason) {
+  resource_fatal_.store(true, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lk(fatal_mutex_);
+    fatal_reason_ = reason;
+  }
+  std::fprintf(stderr, "致命 | 视频编码 | DEVICE_RESOURCE_FATAL: %s\n", reason.c_str());
+  std::fflush(stderr);
+}
+
+std::string SophonVideoSink::fatal_reason() const {
+  std::lock_guard<std::mutex> lk(fatal_mutex_);
+  return fatal_reason_;
+}
 
 void SophonVideoSink::sleep_interruptible(int64_t ms) {
   const int64_t step = 50;
@@ -65,10 +87,12 @@ bool SophonVideoSink::open(const std::string& path, int width, int height, int f
 
   if (sink_type_ == "rtmp") {
     if (!open_rtmp_muxer(path, err)) {
+      teardown_muxer_encoder();  // 清理已打开的编码器，避免半初始化
       return false;
     }
   } else {
     if (!open_file_muxer(path, err)) {
+      teardown_muxer_encoder();
       return false;
     }
   }
@@ -106,7 +130,13 @@ bool SophonVideoSink::open_encoder(int width, int height, int fps, int bitrate_k
   if (r < 0) {
     char eb[AV_ERROR_MAX_STRING_SIZE];
     av_strerror(r, eb, sizeof(eb));
-    err = std::string("打开编码器失败: ") + eb;
+    avcodec_free_context(&enc_);  // 立即清理半初始化上下文
+    if (r == AVERROR(ENOMEM)) {
+      mark_resource_fatal(std::string("编码器打开内存不足: ") + eb);
+      err = std::string("DEVICE_RESOURCE_FATAL: 编码器打开内存不足: ") + eb;
+    } else {
+      err = std::string("打开编码器失败: ") + eb;
+    }
     return false;
   }
   encoder_name_ = enc->name;  // 实际编码器名
@@ -193,8 +223,11 @@ bool SophonVideoSink::open_file_muxer(const std::string& path, std::string& err)
 }
 
 bool SophonVideoSink::open_rtmp_muxer(const std::string& url, std::string& err) {
-  // RTMP 推流：FLV muxer + RTMP 协议（avio_open2）。
-  // 不通过文件扩展名判断容器，直接指定 "flv"。
+  // RTMP 推流：FLV muxer + RTMP 协议（avio_open2）。复用已打开的 enc_（不重建编码器）。
+  if (!enc_) {
+    err = "编码器未打开，无法建立 RTMP muxer";
+    return false;
+  }
   AVFormatContext* m = nullptr;
   if (avformat_alloc_output_context2(&m, nullptr, "flv", url.c_str()) < 0 || !m) {
     err = "分配 FLV 封装失败";
@@ -249,8 +282,8 @@ bool SophonVideoSink::open_rtmp_muxer(const std::string& url, std::string& err) 
   return true;
 }
 
-void SophonVideoSink::teardown_muxer_encoder() {
-  // 释放当前 muxer 与编码器，保留重连所需参数（saved_*）。
+void SophonVideoSink::teardown_muxer() {
+  // 仅释放 muxer 与 AVIO，保留编码器（用于 RTMP 网络重连，避免 VPU 显存 churn）。
   if (mux_) {
     if (mux_->pb && !(mux_->oformat->flags & AVFMT_NOFILE)) {
       avio_closep(&mux_->pb);
@@ -258,25 +291,38 @@ void SophonVideoSink::teardown_muxer_encoder() {
     avformat_free_context(mux_);
     mux_ = nullptr;
   }
-  if (enc_) {
-    avcodec_free_context(&enc_);
-  }
   vstream_ = nullptr;
   header_written_ = false;
 }
 
+void SophonVideoSink::teardown_muxer_encoder() {
+  teardown_muxer();
+  if (enc_) {
+    avcodec_free_context(&enc_);
+  }
+}
+
 bool SophonVideoSink::reconnect_rtmp(std::string& err) {
-  // RTMP 重连：不重新加载 bmodel，不重新连接 RTSP。
-  // 退避 -> 重建编码器 -> 重建 FLV muxer -> 重开 RTMP -> 重写 header -> 重置 PTS。
-  teardown_muxer_encoder();
+  // 普通网络断开仅重建 muxer/AVIO，绝不重建硬件编码器。
+  // 编码器致命（ENOMEM/未打开）升级 DEVICE_RESOURCE_FATAL，禁止错误风暴。
+  if (!enc_) {
+    mark_resource_fatal("RTMP重连时编码器不可用");
+    err = "DEVICE_RESOURCE_FATAL: 编码器不可用";
+    return false;
+  }
+  teardown_muxer();  // 仅释放 muxer+AVIO，保留 enc_
   while (true) {
     if (stop_requested_.load()) {
       err = "停止";
       return false;
     }
+    if (resource_fatal_.load()) {
+      err = "DEVICE_RESOURCE_FATAL: " + fatal_reason();
+      return false;
+    }
     int64_t backoff = rtmp_backoff_.on_failure();
     std::fprintf(stdout,
-                 "信息 | RTMP重连 | BACKOFF 第%d次 退避%lldms\n",
+                 "信息 | RTMP重连 | BACKOFF 第%d次 退避%lldms（仅重建muxer）\n",
                  rtmp_backoff_.attempts(), static_cast<long long>(backoff));
     std::fflush(stdout);
     sleep_interruptible(backoff);
@@ -284,29 +330,33 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
       err = "停止";
       return false;
     }
-    // 重建编码器
-    if (!open_encoder(saved_width_, saved_height_, saved_fps_, saved_bitrate_kbps_,
-                      saved_gop_, saved_device_, saved_encoder_name_, err)) {
-      std::fprintf(stdout, "信息 | RTMP重连 | 编码器重建失败：%s\n", err.c_str());
-      std::fflush(stdout);
-      continue;
-    }
-    // 重建 FLV muxer 并重开 RTMP
+    // 重建 FLV muxer 并重开 RTMP（复用现有 enc_）
     if (!open_rtmp_muxer(output_url_, err)) {
       std::fprintf(stdout, "信息 | RTMP重连 | RTMP重连失败：%s\n", err.c_str());
       std::fflush(stdout);
-      teardown_muxer_encoder();
+      teardown_muxer();  // 清理半开 muxer，继续退避
       continue;
     }
     // 重连成功：重置退避，重置 PTS（新会话从 0 开始，避免 non-monotonous DTS）
     rtmp_backoff_.on_success();
     ++rtmp_reconnect_count_;
     pts_.reset();
-    std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS已重置）\n",
+    std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS已重置，编码器未重建）\n",
                  rtmp_reconnect_count_);
     std::fflush(stdout);
     return true;
   }
+}
+
+bool SophonVideoSink::simulate_rtmp_reconnect(const std::string& url, std::string& err) {
+  // 测试钩子：强制一次仅重建 muxer 的重连（复用现有编码器）。
+  if (!enc_) {
+    mark_resource_fatal("simulate_rtmp_reconnect 编码器不可用");
+    err = "DEVICE_RESOURCE_FATAL: 编码器不可用";
+    return false;
+  }
+  teardown_muxer();
+  return open_rtmp_muxer(url, err);
 }
 
 void SophonVideoSink::drain_packets(std::string& err) {
@@ -339,9 +389,18 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
   // 按输出帧序重置 pts（编码器 time_base = 1/fps）；忽略源 PTS，保证输出单调。
   vf.frame->pts = pts_.next();
   int sr = avcodec_send_frame(enc_, vf.frame);
+  if (sr == AVERROR(EAGAIN)) {
+    drain_packets(err);  // 编码器内部满，先冲刷已编码包再重试
+    sr = avcodec_send_frame(enc_, vf.frame);
+  }
   if (sr < 0) {
     char eb[AV_ERROR_MAX_STRING_SIZE];
     av_strerror(sr, eb, sizeof(eb));
+    if (decide_rtmp_reconnect(sr, enc_ != nullptr) == RtmpReconnectAction::ESCALATE_FATAL) {
+      mark_resource_fatal(std::string("编码器内存不足: ") + eb);
+      err = std::string("DEVICE_RESOURCE_FATAL: ") + eb;
+      return false;
+    }
     err = std::string("编码送帧失败: ") + eb;
     return false;
   }
@@ -356,9 +415,18 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
     // 重连成功后重新写入当前帧
     vf.frame->pts = pts_.next();
     sr = avcodec_send_frame(enc_, vf.frame);
+    if (sr == AVERROR(EAGAIN)) {
+      drain_packets(err);
+      sr = avcodec_send_frame(enc_, vf.frame);
+    }
     if (sr < 0) {
       char eb[AV_ERROR_MAX_STRING_SIZE];
       av_strerror(sr, eb, sizeof(eb));
+      if (decide_rtmp_reconnect(sr, enc_ != nullptr) == RtmpReconnectAction::ESCALATE_FATAL) {
+        mark_resource_fatal(std::string("重连后编码器内存不足: ") + eb);
+        err = std::string("DEVICE_RESOURCE_FATAL: ") + eb;
+        return false;
+      }
       err = std::string("重连后编码送帧失败: ") + eb;
       return false;
     }
@@ -371,7 +439,7 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
 }
 
 void SophonVideoSink::close() {
-  if (enc_ && header_written_) {
+  if (enc_ && header_written_ && mux_) {
     std::string e;
     avcodec_send_frame(enc_, nullptr);  // flush
     drain_packets(e);
@@ -379,20 +447,10 @@ void SophonVideoSink::close() {
   if (mux_ && header_written_) {
     av_write_trailer(mux_);
   }
-  if (mux_) {
-    if (mux_->pb && !(mux_->oformat->flags & AVFMT_NOFILE)) {
-      avio_closep(&mux_->pb);
-    }
-    avformat_free_context(mux_);
-    mux_ = nullptr;
-  }
-  if (enc_) {
-    avcodec_free_context(&enc_);
-  }
+  teardown_muxer_encoder();
   if (pkt_) {
     av_packet_free(&pkt_);
   }
-  header_written_ = false;
 }
 
 }  // namespace hzw

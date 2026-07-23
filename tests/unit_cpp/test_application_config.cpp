@@ -150,6 +150,8 @@ static void test_config_load() {
 
   // resolve_env（无环境变量时返回空）
   CHECK(cfg.resolve_env("NONEXISTENT_VAR_XYZ") == "");
+  // extra_frame_buffer_num 默认值（SAMPLE_YAML 无 runtime 段）
+  CHECK(cfg.extra_frame_buffer_num == 20);
 }
 
 static void test_production_rejects_mock() {
@@ -203,11 +205,61 @@ business:
   CHECK(err.find("coordinate_model") != std::string::npos);
 }
 
+static void test_extra_frame_buffer_num() {
+  // 配置化：runtime.extra_frame_buffer_num 覆盖默认值。
+  const char* yaml = R"(
+application:
+  environment: development
+inference:
+  model_path: "/opt/m.bmodel"
+runtime:
+  extra_frame_buffer_num: 12
+streams:
+  - id: A
+    enabled: false
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    output_fps: 10
+    inference_fps: 5
+)";
+  YamlValue root;
+  std::string err;
+  parse_yaml(yaml, root, err);
+  ApplicationConfig cfg;
+  bool ok = cfg.from_yaml(root, err);
+  CHECK(ok);
+  CHECK(cfg.extra_frame_buffer_num == 12);
+
+  // 非法值（< 1）必须被拒绝。
+  const char* bad_yaml = R"(
+application:
+  environment: development
+inference:
+  model_path: "/opt/m.bmodel"
+runtime:
+  extra_frame_buffer_num: 0
+streams:
+  - id: A
+    enabled: false
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    output_fps: 10
+    inference_fps: 5
+)";
+  YamlValue root2;
+  parse_yaml(bad_yaml, root2, err);
+  ApplicationConfig cfg2;
+  bool ok2 = cfg2.from_yaml(root2, err);
+  CHECK(!ok2);
+  CHECK(err.find("extra_frame_buffer_num") != std::string::npos);
+}
+
 int main() {
   test_yaml_parser();
   test_config_load();
   test_production_rejects_mock();
   test_production_missing_model();
+  test_extra_frame_buffer_num();
   if (failures == 0) {
     std::printf("OK application_config: all tests passed\n");
     return 0;

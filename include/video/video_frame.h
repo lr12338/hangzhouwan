@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include "video/ffmpeg_compat.h"
+#include "video/inflight_frame_tracker.h"
 
 namespace hzw {
 
@@ -23,6 +24,7 @@ struct VideoFrame {
   int width = 0;
   int height = 0;
   AVFrame* frame = nullptr;      // NV12 bm_image；持有引用，需 release()
+  InflightFrameTracker* frame_tracker_ = nullptr;  // 在途帧计数器（源拥有，release 时递减；可为空）
 
   bool valid() const { return frame != nullptr; }
 
@@ -33,18 +35,26 @@ struct VideoFrame {
     release();
     sequence = o.sequence; pts = o.pts; capture_time_ms = o.capture_time_ms;
     source_epoch = o.source_epoch; width = o.width; height = o.height; frame = o.frame;
-    o.frame = nullptr;
+    frame_tracker_ = o.frame_tracker_;
+    o.frame = nullptr; o.frame_tracker_ = nullptr;
     return *this;
   }
   VideoFrame(const VideoFrame&) = delete;
   VideoFrame& operator=(const VideoFrame&) = delete;
 
   // 归还引用计数（线程安全：同一 frame 仅能 release 一次）。
+  // 先 av_frame_unref 让解码器 bm_image 池回收设备内存，再递减在途计数器，
+  // 确保源在关闭解码器前能观测到设备内存已全部归还。
+  // 禁止直接 bm_free_device 释放 Codec 内部地址：仅 av_frame_unref 是合法回收路径。
   void release() {
     if (frame) {
       av_frame_unref(frame);
       av_frame_free(&frame);
       frame = nullptr;
+    }
+    if (frame_tracker_) {
+      frame_tracker_->on_release();
+      frame_tracker_ = nullptr;
     }
   }
 };

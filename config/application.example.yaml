@@ -69,6 +69,7 @@ runtime:
   processed_queue_size: 1
   reconnect_initial_seconds: 2
   reconnect_max_seconds: 30
+  extra_frame_buffer_num: 20   # 解码输出缓冲池（重连稳定性关键，推荐 20；压测见 docs/production/vpu-reconnect-fix.md）
   decoder: h264_bm
   encoder: h264_bm
   preprocess: bmcv                 # cpu | bmcv

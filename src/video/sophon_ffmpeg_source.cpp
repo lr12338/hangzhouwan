@@ -14,6 +14,7 @@ int64_t now_ms() {
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
+bool is_enomem(int averr) { return averr == AVERROR(ENOMEM); }
 }  // namespace
 
 SophonVideoSource::~SophonVideoSource() { close(); }
@@ -30,6 +31,21 @@ void SophonVideoSource::sleep_interruptible(int64_t ms) {
     int64_t chunk = (ms - slept < step) ? (ms - slept) : step;
     std::this_thread::sleep_for(std::chrono::milliseconds(chunk));
   }
+}
+
+void SophonVideoSource::mark_resource_fatal(const std::string& reason) {
+  resource_fatal_.store(true, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lk(fatal_mutex_);
+    fatal_reason_ = reason;
+  }
+  std::fprintf(stderr, "致命 | 视频源 | DEVICE_RESOURCE_FATAL: %s\n", reason.c_str());
+  std::fflush(stderr);
+}
+
+std::string SophonVideoSource::fatal_reason() const {
+  std::lock_guard<std::mutex> lk(fatal_mutex_);
+  return fatal_reason_;
 }
 
 bool SophonVideoSource::open_input(const std::string& url, AVDictionary** opts_ptr,
@@ -53,6 +69,7 @@ bool SophonVideoSource::open_input(const std::string& url, AVDictionary** opts_p
   fmt_ = ctx;
   if (avformat_find_stream_info(fmt_, nullptr) < 0) {
     err = "无法获取流信息";
+    avformat_close_input(&fmt_);
     return false;
   }
   for (unsigned i = 0; i < fmt_->nb_streams; ++i) {
@@ -63,6 +80,7 @@ bool SophonVideoSource::open_input(const std::string& url, AVDictionary** opts_p
   }
   if (video_index_ < 0) {
     err = "未找到视频流";
+    avformat_close_input(&fmt_);
     return false;
   }
   AVStream* st = fmt_->streams[video_index_];
@@ -81,10 +99,14 @@ bool SophonVideoSource::open(const std::string& path, int device,
   path_ = path;
   device_ = device;
   extra_frame_buffer_num_ = extra_frame_buffer_num;
+  decoder_name_ = decoder_name;
   is_rtsp_ = false;
 
   if (!open_input(path, nullptr, err)) return false;
-  if (!open_decoder(decoder_name, err)) return false;
+  if (!open_decoder(decoder_name, err)) {
+    avformat_close_input(&fmt_);
+    return false;
+  }
 
   pkt_ = av_packet_alloc();
   frame_ = av_frame_alloc();
@@ -93,7 +115,8 @@ bool SophonVideoSource::open(const std::string& path, int device,
   packets_read_ = 0;
   source_epoch_ = 1;
   std::fprintf(stdout, "信息 | 视频解码 | 输入：%s\n", path.c_str());
-  std::fprintf(stdout, "信息 | 视频解码 | 解码器：%s\n", decoder_name.c_str());
+  std::fprintf(stdout, "信息 | 视频解码 | 解码器：%s extra_frame_buffer_num=%d\n",
+               decoder_name.c_str(), extra_frame_buffer_num_);
   std::fprintf(stdout, "信息 | 视频解码 | 尺寸：%dx%d，源帧率：%dfps\n", width_, height_, fps_);
   std::fflush(stdout);
   return true;
@@ -107,6 +130,7 @@ bool SophonVideoSource::open_rtsp(const std::string& url, int device,
   rtsp_url_ = url;
   device_ = device;
   extra_frame_buffer_num_ = extra_frame_buffer_num;
+  decoder_name_ = decoder_name;
   is_rtsp_ = true;
   rtsp_opts_ = opts;
   reconnect_policy_ = ReconnectPolicy(opts.initial_backoff_ms, opts.max_backoff_ms);
@@ -118,7 +142,10 @@ bool SophonVideoSource::open_rtsp(const std::string& url, int device,
   bool ok = open_input(url, &dict, err);
   av_dict_free(&dict);
   if (!ok) return false;
-  if (!open_decoder(decoder_name, err)) return false;
+  if (!open_decoder(decoder_name, err)) {
+    avformat_close_input(&fmt_);
+    return false;
+  }
 
   pkt_ = av_packet_alloc();
   frame_ = av_frame_alloc();
@@ -128,33 +155,36 @@ bool SophonVideoSource::open_rtsp(const std::string& url, int device,
   reconnect_count_ = 0;
   source_epoch_ = 1;
   std::fprintf(stdout, "信息 | 视频解码 | 输入(RTSP)：%s\n", redact_url_credentials(url).c_str());
-  std::fprintf(stdout, "信息 | 视频解码 | 解码器：%s 传输：%s stimeout=%lldus\n",
+  std::fprintf(stdout, "信息 | 视频解码 | 解码器：%s 传输：%s stimeout=%lldus extra_frame_buffer_num=%d\n",
                decoder_name.c_str(), opts.transport.c_str(),
-               static_cast<long long>(opts.stimeout_us));
+               static_cast<long long>(opts.stimeout_us), extra_frame_buffer_num_);
   std::fprintf(stdout, "信息 | 视频解码 | 尺寸：%dx%d，源帧率：%dfps\n", width_, height_, fps_);
   std::fflush(stdout);
   return true;
 }
 
-bool SophonVideoSource::try_reopen_rtsp(std::string& err) {
-  // 仅关闭输入与解码器，保留 pkt_/frame_ 复用。
+bool SophonVideoSource::try_reopen(const std::string& url, const std::string& decoder_name,
+                                   AVDictionary** opts_ptr, std::string& err) {
+  // 前置：在途帧必须已归零。关闭旧解码器（受在途帧保护）。
   close_decoder();
+  if (resource_fatal_.load()) {
+    err = "DEVICE_RESOURCE_FATAL: 旧解码器在途帧未归零，拒绝换建";
+    return false;
+  }
   if (fmt_) avformat_close_input(&fmt_);
   video_index_ = -1;
 
-  AVDictionary* dict = nullptr;
-  av_dict_set(&dict, "rtsp_transport", rtsp_opts_.transport.c_str(), 0);
-  if (rtsp_opts_.stimeout_us > 0)
-    av_dict_set_int(&dict, "stimeout", rtsp_opts_.stimeout_us, 0);
-  bool ok = open_input(rtsp_url_, &dict, err);
-  av_dict_free(&dict);
-  if (!ok) return false;
-  // 解码器名固定 h264_bm，从原 decoder 不可达；这里沿用 h264_bm。
-  if (!open_decoder("h264_bm", err)) return false;
+  if (!open_input(url, opts_ptr, err)) return false;  // open_input 失败已自清理 fmt_
+  if (!open_decoder(decoder_name, err)) {
+    // open_decoder 失败已清理 dec_；关闭已打开的输入，避免半初始化上下文残留。
+    if (fmt_) avformat_close_input(&fmt_);
+    return false;
+  }
   return true;
 }
 
-bool SophonVideoSource::reconnect(std::string& err) {
+bool SophonVideoSource::reconnect_rtsp(std::string& err) {
+  // 调用方（管线）已停止产生新帧、清空 jitter/decode/encode 队列并等待在途帧归零。
   while (true) {
     if (stop_requested_.load()) {
       err = "停止";
@@ -176,8 +206,14 @@ bool SophonVideoSource::reconnect(std::string& err) {
       err = "停止";
       return false;
     }
+    AVDictionary* dict = nullptr;
+    av_dict_set(&dict, "rtsp_transport", rtsp_opts_.transport.c_str(), 0);
+    if (rtsp_opts_.stimeout_us > 0)
+      av_dict_set_int(&dict, "stimeout", rtsp_opts_.stimeout_us, 0);
     std::string e;
-    if (try_reopen_rtsp(e)) {
+    bool ok = try_reopen(rtsp_url_, "h264_bm", &dict, e);
+    av_dict_free(&dict);
+    if (ok) {
       reconnect_policy_.on_success();
       ++reconnect_count_;
       ++source_epoch_;
@@ -186,10 +222,36 @@ bool SophonVideoSource::reconnect(std::string& err) {
       std::fflush(stdout);
       return true;
     }
-    // 重连失败：记录原因（不含 URL），继续退避循环
+    // 资源致命（VPU/解码器 ENOMEM）立即升级，禁止错误风暴式重试。
+    if (resource_fatal_.load()) {
+      err = e;
+      return false;
+    }
     std::fprintf(stdout, "信息 | RTSP重连 | 重连失败：%s\n", e.c_str());
     std::fflush(stdout);
   }
+}
+
+bool SophonVideoSource::simulate_reconnect(std::string& err) {
+  // 测试钩子：复用与生产重连等价的“等待在途帧归零 -> 换建解码器”路径。
+  if (!wait_avframes_drained(5000)) {
+    mark_resource_fatal("simulate_reconnect 在途帧未归零");
+    err = "DEVICE_RESOURCE_FATAL: 在途帧未归零";
+    return false;
+  }
+  if (is_rtsp_) {
+    AVDictionary* dict = nullptr;
+    av_dict_set(&dict, "rtsp_transport", rtsp_opts_.transport.c_str(), 0);
+    if (rtsp_opts_.stimeout_us > 0)
+      av_dict_set_int(&dict, "stimeout", rtsp_opts_.stimeout_us, 0);
+    bool ok = try_reopen(rtsp_url_, "h264_bm", &dict, err);
+    av_dict_free(&dict);
+    if (ok) { ++reconnect_count_; ++source_epoch_; }
+    return ok;
+  }
+  bool ok = try_reopen(path_, decoder_name_, nullptr, err);
+  if (ok) { ++reconnect_count_; ++source_epoch_; }
+  return ok;
 }
 
 bool SophonVideoSource::open_decoder(const std::string& decoder_name, std::string& err) {
@@ -205,6 +267,7 @@ bool SophonVideoSource::open_decoder(const std::string& decoder_name, std::strin
   }
   if (avcodec_parameters_to_context(dec_, fmt_->streams[video_index_]->codecpar) < 0) {
     err = "复制解码参数失败";
+    avcodec_free_context(&dec_);  // 立即清理半初始化上下文
     return false;
   }
   av_opt_set_int(dec_, "sophon_idx", device_, 0);
@@ -215,7 +278,13 @@ bool SophonVideoSource::open_decoder(const std::string& decoder_name, std::strin
   if (r < 0) {
     char eb[AV_ERROR_MAX_STRING_SIZE];
     av_strerror(r, eb, sizeof(eb));
-    err = std::string("打开解码器失败: ") + eb;
+    avcodec_free_context(&dec_);  // 立即清理半初始化上下文
+    if (is_enomem(r)) {
+      mark_resource_fatal(std::string("解码器打开内存不足: ") + eb);
+      err = std::string("DEVICE_RESOURCE_FATAL: 解码器打开内存不足: ") + eb;
+    } else {
+      err = std::string("打开解码器失败: ") + eb;
+    }
     return false;
   }
   return true;
@@ -237,37 +306,59 @@ bool SophonVideoSource::read(VideoFrame& vf, std::string& err) {
     err = "解码器未打开";
     return false;
   }
+  if (resource_fatal_.load()) {
+    err = "DEVICE_RESOURCE_FATAL: " + fatal_reason();
+    return false;
+  }
   while (true) {
     // 先消费已发送 packet 产生的帧。
     AVFrame* tmp = av_frame_alloc();
-    while (true) {
-      int rr = avcodec_receive_frame(dec_, tmp);
-      if (rr == 0) {
-        vf.frame = tmp;  // 所有权转移
-        vf.sequence = seq_++;
-        vf.pts = (tmp->pts != AV_NOPTS_VALUE) ? tmp->pts : 0;
-        vf.capture_time_ms = now_ms();
-        vf.source_epoch = source_epoch_;
-        vf.width = tmp->width;
-        vf.height = tmp->height;
-        return true;
-      }
-      break;  // EAGAIN 或 EOF：需要更多 packet
+    if (!tmp) {
+      mark_resource_fatal("av_frame_alloc 失败");
+      err = "DEVICE_RESOURCE_FATAL: av_frame_alloc 失败";
+      return false;
+    }
+    int rr = avcodec_receive_frame(dec_, tmp);
+    if (rr == 0) {
+      vf.frame = tmp;                       // 所有权转移
+      vf.frame_tracker_ = &inflight_;       // 绑定在途计数器
+      inflight_.on_produce();
+      vf.sequence = seq_++;
+      vf.pts = (tmp->pts != AV_NOPTS_VALUE) ? tmp->pts : 0;
+      vf.capture_time_ms = now_ms();
+      vf.source_epoch = source_epoch_;
+      vf.width = tmp->width;
+      vf.height = tmp->height;
+      return true;
     }
     av_frame_free(&tmp);
+    if (rr != AVERROR(EAGAIN)) {
+      char eb[AV_ERROR_MAX_STRING_SIZE];
+      av_strerror(rr, eb, sizeof(eb));
+      if (is_enomem(rr)) {
+        mark_resource_fatal(std::string("解码器内存不足(receive_frame): ") + eb);
+        err = std::string("DEVICE_RESOURCE_FATAL: ") + eb;
+        return false;
+      }
+      if (rr != AVERROR_EOF) {
+        // 单个坏包不应致命：记录并继续读取下一包。
+        std::fprintf(stdout, "警告 | 视频解码 | receive_frame 错误：%s，跳过\n", eb);
+        std::fflush(stdout);
+      }
+    }
 
     int r = av_read_frame(fmt_, pkt_);
     if (r < 0) {
       if (is_rtsp_) {
-        // RTSP 断流/读取超时：受控重连（除非已请求停止）
+        // RTSP 断流/读取超时：交由管线协调重连（先清空缓冲、等待在途帧归零）。
         if (stop_requested_.load()) {
           err = "停止";
           return false;
         }
-        std::fprintf(stdout, "信息 | RTSP重连 | 读取失败/断流，进入重连流程\n");
+        std::fprintf(stdout, "信息 | RTSP重连 | 读取失败/断流，交由管线协调重连\n");
         std::fflush(stdout);
-        if (!reconnect(err)) return false;
-        continue;  // 在新连接上继续读取
+        err = "RTSP_RECONNECT";
+        return false;
       }
       // 本地文件：EOF 或错误
       ++loops_completed_;
@@ -284,16 +375,35 @@ bool SophonVideoSource::read(VideoFrame& vf, std::string& err) {
     }
     ++packets_read_;
     if (pkt_->stream_index == video_index_) {
-      avcodec_send_packet(dec_, pkt_);
+      int sp = avcodec_send_packet(dec_, pkt_);
+      if (sp < 0 && sp != AVERROR(EAGAIN)) {
+        char eb[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(sp, eb, sizeof(eb));
+        if (is_enomem(sp)) {
+          mark_resource_fatal(std::string("解码器内存不足(send_packet): ") + eb);
+          err = std::string("DEVICE_RESOURCE_FATAL: ") + eb;
+          av_packet_unref(pkt_);
+          return false;
+        }
+        if (sp != AVERROR_EOF) {
+          std::fprintf(stdout, "警告 | 视频解码 | send_packet 错误：%s，跳过该包\n", eb);
+          std::fflush(stdout);
+        }
+      }
     }
     av_packet_unref(pkt_);
   }
 }
 
 void SophonVideoSource::close_decoder() {
-  if (dec_) {
-    avcodec_free_context(&dec_);
+  if (!dec_) return;
+  // 硬性保护：在途帧引用解码器 bm_image 池时禁止关闭，否则设备内存泄漏。
+  if (inflight_.count() != 0) {
+    mark_resource_fatal("关闭解码器时仍有 " + std::to_string(inflight_.count()) +
+                        " 帧在途，拒绝关闭以防 VPU 显存泄漏");
+    return;  // 不释放 dec_，交由进程退出回收
   }
+  avcodec_free_context(&dec_);
 }
 
 void SophonVideoSource::close() {

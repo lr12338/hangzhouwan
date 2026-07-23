@@ -52,6 +52,7 @@ struct PipelineConfig {
   int inference_fps = 5;
   int bitrate_kbps = 800;
   int gop = 20;
+  int extra_frame_buffer_num = 20;  // 解码输出缓冲池大小（>= 编码器保留帧数，防 bm_image 池死锁）
   int queue_size = 1;
   float conf = 0.1f;
   float iou = 0.1f;
@@ -75,6 +76,7 @@ struct PipelineConfig {
   int rtsp_max_reconnect = -1;         // -1=无限 0=不重连 >0=上限
   int64_t rtsp_initial_backoff_ms = 1000;
   int64_t rtsp_max_backoff_ms = 30000;
+  int rtsp_drain_timeout_ms = 5000;  // 重连前等待在途帧归零的超时
   // 输出 sink 类型（阶段4.3）
   std::string sink_type = "file";      // file | rtmp
   // StreamProfile（阶段4.3：业务配置迁移）
@@ -103,6 +105,10 @@ class SingleStreamPipeline {
   void request_stop();
 
   const PipelineMetrics& metrics() const { return metrics_; }
+
+  // 设备资源致命（源或编码器 VPU ENOMEM/初始化失败）。致命时退出码=70。
+  bool resource_fatal() const;
+  std::string fatal_reason() const;
 
   // Business 连接状态（供健康接口读取）
   EnrichmentState business_state() const {
@@ -146,6 +152,7 @@ class SingleStreamPipeline {
   bool capture_done_ = false;
   std::atomic<bool> stop_{false};
   std::atomic<int> exit_code_{0};
+  std::atomic<bool> rtsp_draining_{false};  // RTSP 重连前快速排空缓冲
   int source_w_ = 0;
   int source_h_ = 0;
   int64_t start_ms_ = 0;
@@ -154,6 +161,11 @@ class SingleStreamPipeline {
   int64_t last_output_ms_ = 0;   // 上次输出帧的墙钟时间
   int64_t last_infer_ms_ = 0;    // 上次推理的墙钟时间
   void set_error(int code, const std::string& msg);
+  // 资源致命：强制设置退出码 70 并停止（覆盖先前非致命错误码），停止双路。
+  void set_resource_fatal(const std::string& msg);
+  // RTSP 重连协调：清空 jitter/decode/encode 队列、等待在途帧归零后调用源重连。
+  bool coordinate_rtsp_reconnect(const PipelineConfig& cfg, std::string& err);
+  void drain_jitter_locked();
 };
 
 }  // namespace hzw
