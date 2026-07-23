@@ -25,6 +25,8 @@
 | 文档 | 用途 | 状态 |
 |---|---|---|
 | [production/operations-guide.md](production/operations-guide.md) | 生产运维手册（启动/停止/状态/日志/配置/升级/回滚/故障） | ✅ |
+| [production/vpu-reconnect-fix.md](production/vpu-reconnect-fix.md) | BM1684 VPU 重连显存耗尽修复（根因/修复/维护窗口验证候选） | 🔶 验证候选 |
+| [production/maintenance-window-runbook.md](production/maintenance-window-runbook.md) | VPU 重连修复维护窗口 Runbook（门禁/步骤/回滚） | 🔶 待批准 |
 | [production/stage7-validation-guide.md](production/stage7-validation-guide.md) | 阶段7实装验证报告（T1-T10方法+结果） | ✅ |
 | [production/manual-long-run-guide.md](production/manual-long-run-guide.md) | 人工长时测试指南（L1-L4） | ✅ |
 | [production/windows-replacement-plan.md](production/windows-replacement-plan.md) | Windows服务灰度替换与回滚方案 | ✅ |

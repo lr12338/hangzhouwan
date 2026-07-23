@@ -1,7 +1,10 @@
 # BM1684 视频重连 VPU 显存耗尽：根因与修复
 
-> 状态：修复已合入 `feat/bm1684-edge-deployment`，已构建候选 Release，**本轮未激活、未重启生产**。
-> 基线 HEAD：`44f3685`。生产仍在运行旧二进制（与 cleanup `46a151c` 一致），仍存在重连稳定性风险。
+> 状态：修复已合入 `feat/bm1684-edge-deployment`（提交 `1a1a7b2`），已构建候选 Release
+> `vpu-reconnect-fix-1a1a7b2`。**该 Release 为“维护窗口验证候选”，尚未获维护窗口批准，不可上线。**
+> **本轮未激活、未重启、未切换生产。** 生产仍运行旧二进制（`current -> 202607221953-3dfcf4e`），
+> VPU heap2 接近耗尽，仍存在重连稳定性风险。`cleanup-46a151c` 不再作为上线候选。
+> 本轮不升级 libsophon/Sophon-FFmpeg，不直接释放 Codec 内部设备地址。
 
 ## 1. 根因证据表
 
@@ -45,11 +48,24 @@
 - 板端 `repro`(本机,生产在跑,VPU 预算紧张)：A_leak +39.5MB/轮(2 轮后熔断保护生产)；进程退出后 heap2 由 2016MB 回落 1937MB(恢复)。
 - 板端 FIXED `decoder 10 8`：10 次重连 ok=10 fail=0 inflight=0，heap2 1943->1931MB(持平)。
 - 板端 sweep(5/8/12/16/20, 各 5 次)：5/8/12/20 持平(~-6MB)；buf=16 样本恰逢生产旧二进制自重连泄漏(+39.5MB)叠加，非修复代码回归(已排除)。
-- **未在本轮执行**：dual 100x / 完整双路 / RTMP 端到端 100x —— 因生产占用设备且 VPU 堆仅余 ~110MB，继续压测有击穿生产风险。工具(`forced_reconnect_run.sh all`)已就绪，**待维护窗口生产停止后运行**(届时 VPU 预算恢复至 ~2GB)。
+- **未在本轮执行**：dual 100x / 完整双路 / RTMP 端到端 100x —— 因生产占用设备且 VPU 堆仅余 ~110MB，继续压测有击穿生产风险。安全运行器
+  `tools/dual_stream/forced_reconnect_run.sh all` 已就绪（生产运行时拒绝执行、仅用候选 Release
+  二进制、每阶段超时、fail-fast、机器可读汇总），**待维护窗口生产停止后运行**（届时 VPU 预算恢复至
+  ~2GB）。完整流程见 `maintenance-window-runbook.md`。
 
-## 4. 推荐 extra_frame_buffer_num
+## 4. extra_frame_buffer_num 取值
 
-**推荐 20**(维持现状)。依据：解码器 bm_image 池基础占用 ~39MB(VPU 内部 dpb，与 extra 关系小)，extra 每档增 ~0.8MB/帧(960x544)。管线最大在途≈jitter5+q_decode1+q_encode1+处理1+编码1≈9 帧，20 提供充足池余量防 bm_image 池死锁与瞬时停滞；sweep 显示 5/8/12/16/20 在修复代码下均稳定。低于 8 在突发解码下余量偏紧，不建议生产调低。
+**本轮不提前固定推荐值。** 配置默认 20（维持现状），但仅作为待验证基线，不作为“已验证最优”结论。
+
+实测依据（修复代码下）：
+- 解码器 bm_image 池基础占用 ~39MB（VPU 内部 dpb，与 extra 关系小），extra 每档增 ~0.8MB/帧（960x544）。
+- 管线最大在途≈jitter5+q_decode1+q_encode1+处理1+编码1≈9 帧。
+- 已有 sweep（5/8/12/16/20 各 5 次，生产占用叠加）：5/8/12/20 持平（~-6MB）；16 样本恰逢生产旧二进制自重连泄漏叠加（已排除，非修复回归）。
+
+结论与限制：
+- 目前**无实测证据证明 20 在稳定性上优于 8 或 12**——三者均持平且无失败。因此不提前固定 20 为生产推荐值。
+- 维护窗口 sweep（5/8/12/20 各 20 次，生产停止、VPU 预算恢复）将提供可比数据；届时依据 heap 持平性、inflight 归零、无失败判定，再决定生产取值。
+- 低于 8 在突发解码下池余量偏紧，不建议低于 8。
 
 ## 5. 新 Release 路径与 manifest
 
@@ -58,18 +74,41 @@
 - manifest 含 version/commit/bmodel_sha256/coord_model sha256/files 清单；`verify_release.sh` 校验 SHA256+manifest。
 - **本轮仅构建，不执行 `activate_release.sh`，不切换 `current` 软链接，不重启 `hangzhouwan.target`。**
 
-## 6. 生产维护窗口升级与回滚
+## 6. 维护窗口升级、验收与回滚流程
 
-**升级(维护窗口)**：
-1. 停 `sudo systemctl stop hangzhouwan.target`(释放 VPU 预算，heap2 应回落至基线)。
-2. 运行 `bash tools/dual_stream/forced_reconnect_run.sh all`，确认 100x 重连 heap2 持平、进程退出后显存恢复。
-3. `bash tools/release/activate_release.sh /opt/hangzhouwan/releases/<version>-<commit>`(预检+冒烟+原子切换 current+重启+60s smoke，失败自动回滚 previous)。
-4. 观察 `bm-smi`/健康 Socket；确认 RTSP/RTMP 重连计数正常、heap2 稳定。
+> 完整可执行步骤（绝对路径、逐步预期结果与失败处理）见 `maintenance-window-runbook.md`。
+> 以下为判定流程。**未获维护窗口批准前，不得停止、重启或切换生产。**
 
-**回滚**：`bash tools/release/rollback_release.sh`(current<->previous 软链接切换+重启+readiness 验证，不重新编译、不 git checkout)。
+### 6.1 通过判定（全部满足方可激活）
+1. `forced_reconnect_run.sh all` 汇总 `overall_rc=0`，各阶段 rc=0、无超时（124）。
+2. RTSP/decoder 100 次重连：ok=100、fail=0、末轮 inflight=0。
+3. VPU 资源无单调增长：各堆 used 在 start->final 持平或下降（无 +39.5MB/轮趋势）。
+4. 原始日志无 `invalid free`、`ENOMEM`、`gmem` 错误。
+5. RTMP 端到端 100x：编码器创建次数=1（普通重连未重建编码器）。
+6. dual 100 次：A_fail=B_fail=0，无资源致命。
+7. 退出码 70 触发 systemd `on-failure` 重启（单测与 systemd 配置审计已确认）。
+
+### 6.2 激活
+`bash tools/release/activate_release.sh /opt/hangzhouwan/releases/vpu-reconnect-fix-1a1a7b2`
+（预检 + 离线冒烟 + 原子 `mv -T` 切换 current + 重启 + 60s smoke；失败自动回滚 previous。）
+
+### 6.3 自动恢复（资源致命）
+任一路 VPU 资源致命 -> `set_resource_fatal()` 退出码 70 -> systemd `Restart=on-failure` 重启 ->
+进程死亡使内核回收 VPU 堆 -> 重启后堆恢复基线。`StartLimitBurst=5`/`StartLimitIntervalSec=120s` 保证
+120s 内最多 5 次重启，超限进入 failed（需人工 `systemctl reset-failed`），不会形成高频重启风暴。
+
+### 6.4 失败与回滚
+- **自动回滚**：激活 smoke 失败时 `activate_release.sh` 自动切回 previous、重启、验证 readiness。
+- **人工回滚**：`bash tools/release/rollback_release.sh`（current<->previous 软链接切换 + 重启 + readiness，
+  不重新编译、不 git checkout）。
+- **自动回滚后禁止未经状态检查再次手动交换 Release**：必须先执行 `bm-smi`（堆恢复）、
+  `systemctl status hangzhouwan.target`（非 failed）、健康 Socket（双路 HEALTHY）、
+  `readlink current/previous` 确认状态正常后，方可再次尝试激活；否则可能在 VPU 未恢复时二次击穿。
 
 ## 7. 约束确认
 
-- 本轮**未激活** cleanup(`46a151c`)、**未修改/未重启**生产服务；生产仍运行旧二进制。
-- **未升级/替换**现场 libsophon/sophon-ffmpeg。
+- `vpu-reconnect-fix-1a1a7b2` 为**维护窗口验证候选**，**不可上线**；维护窗口仍待人工批准。
+- 本轮**未激活** `cleanup-46a151c`（不再作为上线候选）、**未修改/未重启/未切换**生产服务；生产仍运行旧二进制。
+- **未升级/替换**现场 libsophon/sophon-ffmpeg；**未直接释放** Codec 内部设备地址。
 - 修复代码仅在 `build/` 与候选 Release 制品中，未进入 `current`。
+- 维护窗口前不得停止生产；测试运行器在生产运行时拒绝执行（rc=2）。

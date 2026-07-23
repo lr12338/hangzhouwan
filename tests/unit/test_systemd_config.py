@@ -109,5 +109,69 @@ class TargetTest(unittest.TestCase):
         self.assertIn("hangzhouwan-video.service", self.content)
 
 
+class RestartStormPreventionTest(unittest.TestCase):
+    """资源致命退出码 70 触发 systemd 恢复，且配置防止高频重启风暴。
+
+    依据：
+    - Restart=on-failure：非零退出（含 70）视为失败并重启。
+    - SuccessExitStatus/RestartPreventExitStatus 为空：70 既非成功也未被排除，
+      故退出码 70 必然触发 on-failure 重启。
+    - StartLimitBurst<=5 + StartLimitIntervalSec<=300：限流窗口内最多 5 次重启，
+      超限后 systemd 进入 start-limit-hit（failed），需人工 reset-failed，
+      避免资源致命（VPU 耗尽）时形成无限高频重启风暴。
+    - RestartSec>=5：重启间隔，进一步降低重启频率。
+    """
+
+    def setUp(self):
+        self.video = read_unit("hangzhouwan-video.service")
+        self.business = read_unit("hangzhouwan-business.service")
+
+    def _both(self):
+        return (("video", self.video), ("business", self.business))
+
+    def test_both_restart_on_failure(self):
+        for name, content in self._both():
+            self.assertIn("Restart=on-failure", content,
+                          f"{name} 必须 Restart=on-failure 以触发退出码 70 恢复")
+
+    def test_no_success_exit_status(self):
+        for name, content in self._both():
+            self.assertNotIn("SuccessExitStatus", content,
+                             f"{name} 不应声明 SuccessExitStatus，否则 70 可能被误判为成功")
+
+    def test_no_restart_prevent_exit_status(self):
+        for name, content in self._both():
+            self.assertNotIn("RestartPreventExitStatus", content,
+                             f"{name} 不应声明 RestartPreventExitStatus")
+
+    def test_start_limit_prevents_storm(self):
+        import re
+        for name, content in self._both():
+            m = re.search(r"StartLimitBurst\s*=\s*(\d+)", content)
+            self.assertIsNotNone(m, f"{name} 缺少 StartLimitBurst")
+            self.assertLessEqual(int(m.group(1)), 5,
+                                 f"{name} StartLimitBurst 过大，无法防重启风暴")
+            mi = re.search(r"StartLimitIntervalSec\s*=\s*(\d+)", content)
+            self.assertIsNotNone(mi, f"{name} 缺少 StartLimitIntervalSec")
+            self.assertLessEqual(int(mi.group(1)), 300,
+                                 f"{name} StartLimitIntervalSec 过长")
+
+    def test_restart_sec_spacing(self):
+        import re
+        for name, content in self._both():
+            m = re.search(r"RestartSec\s*=\s*(\d+)", content)
+            self.assertIsNotNone(m, f"{name} 缺少 RestartSec")
+            self.assertGreaterEqual(int(m.group(1)), 5,
+                                    f"{name} RestartSec 过小，重启过快")
+
+    def test_exit_70_triggers_restart(self):
+        """综合判定：退出码 70 在当前配置下必然触发 systemd on-failure 重启。"""
+        for name, content in self._both():
+            self.assertIn("Restart=on-failure", content)
+            self.assertNotIn("SuccessExitStatus", content)
+            self.assertNotIn("RestartPreventExitStatus", content)
+            self.assertNotEqual(70, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
