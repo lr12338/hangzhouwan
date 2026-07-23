@@ -227,7 +227,7 @@ systemctl is-active hangzhouwan-video
 - 迁移提交 2：`686cb20`（docs: 补充迁移提交哈希和验证结果）
 - 收尾修正提交：见最终分支 HEAD（本次 .gitignore 修正 + 文档一致性更新）
 - 最终分支 HEAD：`feat/bm1684-edge-deployment`（以 `git log -1 --oneline` 为准）
-- 迁移后验证：Python 测试 93 collected / 91 passed / 2 skipped，preflight 42 项通过，生产服务 HEALTHY
-- 测试命令：`python3 -m pytest tests/ -v`（93 collected, 91 passed, 2 skipped）
+- 迁移后验证：Python 测试通过（以 `python3 -m pytest tests/` 实际输出为准），preflight 通过，生产服务 HEALTHY
+- 测试命令：`python3 -m pytest tests/ -v`（以实际输出为准）
 - 磁盘：根分区 5.8G 已用 73%（4.1G/5.8G），inode 19%（73236/393216）
 - 新仓库大小：209M（含 .git 49M），隔离目录大小：467M

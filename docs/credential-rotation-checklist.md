@@ -16,7 +16,7 @@
 | 4 | MQTT 账号/密码 | `utils_demo/getais.py:24-26` / `getais_flask.py:25-27` | 是 | 更换 MQTT 用户/密码；新值经 `AIS_MQTT_CLIENT_ID/USERNAME/PASSWORD` 注入 |
 | 5 | 船名查询 HTTP 端点 + usertoken | `utils_demo/getais.py:152` / `getais_flask.py:170` | 是 | 轮换 token；端点与令牌均外置，经 `SHIP_NAME_API_ENDPOINT`/`SHIP_NAME_API_TOKEN` 注入，默认空则不调用 |
 | 6 | 声网(Agora) token / APPID / APP证书 | `utils_demo/method.py:6-8`(注释) | 是 | 在 Agora 控制台重置 APP 证书；如不再使用则注销 |
-| 7 | 嵌入运行时产物的 RTSP/RTMP 地址 | `hangzhouwan_beishang/output.txt`（80MB，已 untrack） | 是（已 untrack） | 同 #1/#2 一并轮换；产物不再入库 |
+| 7 | 嵌入运行时产物的 RTSP/RTMP 地址 | `（历史 Windows 原型已移除）output.txt`（80MB，已 untrack） | 是（已 untrack） | 同 #1/#2 一并轮换；产物不再入库 |
 
 ## 2. 历史泄露处理
 

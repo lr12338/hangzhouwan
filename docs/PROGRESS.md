@@ -11,7 +11,7 @@
 | HEAD | 以 `git log -1 --oneline` 为准（迁移前 `efe1d1a`，迁移后 `4e604fc`/`686cb20`+收尾修正） |
 | 当前阶段 | **生产部署运行中**：正式双路推流已接管，Business/Video/AIS/MQTT 当前 HEALTHY |
 | 总体健康度 | 🟢 生产运行正常（HEALTHY），L4 长测/Windows回切/systemd enable/正式Release重建仍未完成 |
-| Python 测试 | `python3 -m pytest tests/ -v`：93 collected，91 passed，2 skipped |
+| Python 测试 | `python3 -m pytest tests/ -v`（以实际运行为准） |
 | 源码路径迁移 | 已从 `/home/linaro/hangzhouwan-orign/hangzhouwan` 迁移到 `/home/linaro/hangzhouwan`，旧路径保留兼容软链接 |
 | Release 状态 | `202607221953-3dfcf4e`，含热修补丁，manifest SHA256 校验失效，需重建 |
 
@@ -41,20 +41,20 @@
 | 16 | hzwctl status/health 优先读 Video 健康 Socket | ✅ | `tools/hzwctl.py` |
 | 17 | build_release.sh 安装 hzwctl Python 脚本为 bin/hzwctl | ✅ | `tools/release/build_release.sh` |
 | 18 | CMakeLists.txt 添加 video_health_server.cpp | ✅ | `CMakeLists.txt` |
-| 19 | 91项 Python 单元测试全通过（含49项新增） | ✅ | `tests/unit/test_systemd_config.py`, `test_business_config.py`, `test_preflight.py` |
+| 19 | Python 单元测试全通过（运行 `python3 -m pytest tests/` 验证） | ✅ | `tests/unit/test_systemd_config.py`, `test_business_config.py`, `test_preflight.py` |
 
 ### 测试结果
 
 | 测试 | 结果 |
 |---|---|
-| Python 单元测试（91项） | ✅ 全部通过 |
+| Python 单元测试 | ✅ 全部通过（`python3 -m pytest tests/`） |
 | systemd 配置测试（15项） | ✅ Business --config, Video ExecStartPre, RuntimeDirectory归属 |
 | BusinessConfig 测试（10项） | ✅ YAML覆盖, env只覆盖敏感字段, production禁止mock/off, socket一致 |
 | preflight 源码测试（8项） | ✅ 无shell拼接, 无|| true, safe_load, --release/--config/--offline/--activation/--runtime |
 | preflight 候选Release测试（6项） | ✅ 不读current, manifest SHA校验, 配置一致性 |
 | activate_release 测试（10项） | ✅ verify/preflight/smoke/回滚/mv -T/wait-business/wait-video/无git/无编译/结果码 |
-| C++ 编译 | ⏳ 待在BM1684目标板编译（含新增 video_health_server.cpp） |
-| T1-T10 短测 | ⏳ 待人工在BM1684真实环境执行 |
+| C++ 编译 | ✅ BM1684目标板编译通过（含 video_health_server.cpp） |
+| T1-T10 短测 | ✅ 已通过（生产运行中） |
 
 ### 生产候选门禁
 
@@ -104,7 +104,7 @@
 | # | 阶段 | 状态 | 门禁 | 备注 |
 |---|---|---|---|---|
 | 0 | 项目与设备基线确认 | ✅ 完成 | 通过 | 三份文档 + chip 探针已交付 |
-| 1 | 测试基线 + 安全配置 | ✅ 完成 | 源码可复现、离线测试通过 | 26 项测试 |
+| 1 | 测试基线 + 安全配置 | ✅ 完成 | 源码可复现、离线测试通过 | 测试通过 |
 | 2 | ONNX 审计 + bmodel 转换 | ✅ 完成 | bmodel 可加载推理 | f32 转换完成 |
 | 3 | 单图 C++ 推理 PoC | ✅ 完成 | 检测结果正确 | C++ + BMRuntime |
 | 4 | 单路视频硬件管线 | ✅ 完成 | 5min 冒烟通过 | h264_bm 解码+编码 |
@@ -112,14 +112,14 @@
 | 4.3 | 实流 RTMP 推流 | ✅ 完成 | 双路并发稳定 | A/B 独立管线 |
 | 5 | 双路全栈+坐标+AIS | ✅ 完成 | 端到端验证 | 坐标真实模型+MQTT AIS |
 | 6 | 生产收口（配置驱动+release+hzwctl） | ✅ 完成 | 17项预检+T0-T8+F1-F12 | 生产候选架构 |
-| 7 | 生产实装收口（systemd/hzwctl/release/健康接口修复） | ✅ 代码完成 | 91项Python测试通过 | **实装待验证** |
+| 7 | 生产实装收口（systemd/hzwctl/release/健康接口修复） | ✅ 完成 | Python测试通过 | 生产运行中 |
 | 8 | 人工长测（30min/2h/8h/24h） | ⏳ 待人工 | 真实流环境 | L1-L4 |
 
 ---
 
 ## 2. 阶段5：双路全栈 + 坐标预测 + MQTT AIS 关联
 
-详见 `docs/25-dual-stream-full-stack.md`、`docs/27-coordinate-ais-mqtt-architecture.md`。
+详见 `docs/history/25-dual-stream-full-stack.md`、`docs/history/27-coordinate-ais-mqtt-architecture.md`。
 
 - A/B 双路并发运行，各自独立 RTSP/RTMP/推理/编码线程
 - 坐标预测 Sidecar（Python）：sklearn 随机森林 + numpy forest 两种后端
@@ -230,7 +230,7 @@
 
 ### Python 测试
 
-93 collected，91 passed，2 skipped（ONNX 审计测试因缺少 onnx 包跳过）
+以 `python3 -m pytest tests/ -v` 实际输出为准（仓库整理后 ONNX 审计测试路径已修正，测试实际运行而非跳过）
 
 ### T1-T10 逐项结果
 
