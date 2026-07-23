@@ -44,19 +44,22 @@ elif [ -f "$REPO_ROOT/tools/hzwctl.py" ]; then
 fi
 chmod 0755 "$RELEASE_DIR/bin/"*
 
-# 4. 复制模型
+# 4. 复制模型（外部权重资产，缺失即 fail-fast，不产出残缺 Release）
 echo "[4/7] 复制模型..."
 BMODEL="$REPO_ROOT/artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel"
-if [ -f "$BMODEL" ]; then
-  cp "$BMODEL" "$RELEASE_DIR/models/"
-else
-  echo "  警告: bmodel 未找到 $BMODEL"
-fi
-for m in "0121_random_forest_model.pkl" "beishang_x-l.pkl"; do
-  if [ -f "$REPO_ROOT/weights/$m" ]; then
-    cp "$REPO_ROOT/weights/$m" "$RELEASE_DIR/models/"
+PKL_A="$REPO_ROOT/weights/0121_random_forest_model.pkl"
+PKL_B="$REPO_ROOT/weights/beishang_x-l.pkl"
+# Release 构建依赖 Git 源码 + 固定 SHA256 的外部权重资产，缺一不可。
+for asset in "$BMODEL" "$PKL_A" "$PKL_B"; do
+  if [ ! -f "$asset" ]; then
+    echo "  ❌ 必需外部资产缺失: $asset" >&2
+    echo "  Release 构建依赖 Git 源码和固定 SHA256 的外部权重资产，缺失即中止。" >&2
+    exit 1
   fi
 done
+cp "$BMODEL" "$RELEASE_DIR/models/"
+cp "$PKL_A" "$RELEASE_DIR/models/"
+cp "$PKL_B" "$RELEASE_DIR/models/"
 
 # 5. 复制 systemd / config / services
 echo "[5/7] 复制 systemd / config / services / tmpfiles.d..."

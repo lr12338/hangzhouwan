@@ -38,8 +38,11 @@ echo ""
 echo "  current -> $(readlink -f "$CURRENT_LINK")"
 echo "  previous -> $(readlink -f "$PREVIOUS_LINK")"
 
-# 重启服务
+# 重启服务（先 reset-failed 清除 StartLimitBurst，避免 restart 被抑制）
 echo "  重启 hangzhouwan.target..."
+sudo systemctl reset-failed "$TARGET_SVC" 2>/dev/null || true
+sudo systemctl reset-failed hangzhouwan-business.service 2>/dev/null || true
+sudo systemctl reset-failed hangzhouwan-video.service 2>/dev/null || true
 sudo systemctl restart "$TARGET_SVC" 2>/dev/null || echo "  ⚠️  systemctl restart 失败（可能 systemd 不可用）"
 
 # 验证 readiness
