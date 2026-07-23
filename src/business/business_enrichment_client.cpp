@@ -236,6 +236,11 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
   }
 
   // 更新状态
+  // 空结果（本帧无检测框）：Sidecar 正常响应，保持当前状态，
+  // 不误判为 DETECTION_ONLY（避免健康状态在无船帧时闪烁）。
+  if (results.empty()) {
+    return true;
+  }
   EnrichmentState new_state = EnrichmentState::DETECTION_ONLY;
   if (any_match) new_state = EnrichmentState::FULL;
   else if (any_coord) new_state = EnrichmentState::COORD_ONLY;

@@ -6,6 +6,11 @@ import re
 
 from .decoder import PyAisDecoder
 
+# 追加在 AIVDM 句末的时间戳后缀：*<10位数字>
+_TS_SUFFIX_RE = re.compile(r"\*(\d{10})$")
+# 多分片重组等待中哨兵（不计入解析统计）
+_FRAG_WAITING = object()
+
 
 class MqttAisSubscriber:
     """MQTT AIS 订阅器。
@@ -38,6 +43,8 @@ class MqttAisSubscriber:
         self._capture_count = 0
         self._lock = threading.Lock()
         self._topic_counts = {}
+        self._fragments = {}  # (seq_id, channel) -> {total, parts, first_ts}
+        self._frag_lock = threading.Lock()
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
@@ -71,11 +78,64 @@ class MqttAisSubscriber:
                 )
                 self._capture_file.flush()
                 self._capture_count += 1
-            decoded = self._decoder.decode(raw)
+            decoded = self._decode_with_reassembly(raw)
+            if decoded is _FRAG_WAITING:
+                return  # 多分片未齐，不计入统计
             self.store.update_from_decoded(decoded)
         except Exception:
             with self._lock:
                 self.store.parse_fail += 1
+
+    def _decode_with_reassembly(self, raw):
+        """解码单条消息，支持多分片 AIVDM 重组。
+
+        - 单分片或非 AIVDM：直接解码。
+        - 多分片：按 (seq_id, channel) 缓冲，全部分片到齐后拼接 payload 解码。
+        - 分片未齐：返回 _FRAG_WAITING（不计入解析统计）。
+        """
+        stripped = raw.strip()
+        if not stripped.startswith("!"):
+            return self._decoder.decode(raw)
+        # 去掉追加的时间戳后缀后解析 NMEA 头
+        ts_stripped = _TS_SUFFIX_RE.sub("", stripped).strip()
+        fields = ts_stripped.split(",")
+        if len(fields) < 6:
+            return self._decoder.decode(raw)
+        try:
+            total = int(fields[1])
+        except (ValueError, TypeError):
+            return self._decoder.decode(raw)
+        if total <= 1:
+            return self._decoder.decode(raw)
+        try:
+            frag = int(fields[2])
+        except (ValueError, TypeError):
+            return self._decoder.decode(raw)
+        seq_id = fields[3] if len(fields) > 3 and fields[3] else ""
+        channel = fields[4] if len(fields) > 4 and fields[4] else ""
+        payload = fields[5]
+        key = (seq_id, channel)
+        now = time.time()
+        with self._frag_lock:
+            # 清理超过 30 秒仍未齐的分片缓冲
+            if self._fragments:
+                stale = [k for k, v in self._fragments.items()
+                         if now - v["first_ts"] > 30]
+                for k in stale:
+                    del self._fragments[k]
+            entry = self._fragments.get(key)
+            if entry is None:
+                entry = {"total": total, "parts": {}, "first_ts": now}
+                self._fragments[key] = entry
+            entry["parts"][frag] = payload
+            if len(entry["parts"]) < total:
+                return _FRAG_WAITING
+            combined = "".join(entry["parts"][i]
+                               for i in range(1, total + 1)
+                               if i in entry["parts"])
+            del self._fragments[key]
+        sentence = "!AIVDM,1,1,,A," + combined + ",0"
+        return self._decoder.decode(sentence)
 
     def _open_capture(self):
         if not self.enable_capture or not self.capture_dir:

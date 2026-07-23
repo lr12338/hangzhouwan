@@ -137,6 +137,12 @@ class PyAisDecoder(AisDecoder):
                     })
                 else:
                     return None
+            elif mtype in (5, 24):
+                # 静态数据报告（船名等），无位置信息
+                shipname = getattr(msg, "shipname", None) or getattr(msg, "name", None)
+                if shipname:
+                    result["ship_name"] = str(shipname).strip()
+                return result
             else:
                 return None
             return self._validate(result)
@@ -162,7 +168,7 @@ class PyAisDecoder(AisDecoder):
                 return None
             if not (-180 <= lon <= 180) or not (-90 <= lat <= 90):
                 return None
-            return {
+            res = {
                 "msg_type": 1,
                 "mmsi": str(d.get("mmsi", "")),
                 "lon": lon,
@@ -174,6 +180,10 @@ class PyAisDecoder(AisDecoder):
                 "source_topic": "",
                 "timestamp": None,
             }
+            ship_name = d.get("shipName") or d.get("shipname") or d.get("name")
+            if ship_name:
+                res["ship_name"] = str(ship_name).strip()
+            return res
         except Exception:
             return None
 

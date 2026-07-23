@@ -12,10 +12,12 @@ class AisRecord:
     __slots__ = (
         "mmsi", "lon", "lat", "speed", "course", "heading",
         "ais_timestamp", "receive_timestamp", "source_topic", "decode_status",
+        "ship_name",
     )
 
     def __init__(self, mmsi, lon, lat, speed, course, heading,
-                 ais_timestamp, receive_timestamp, source_topic="", decode_status="ok"):
+                 ais_timestamp, receive_timestamp, source_topic="", decode_status="ok",
+                 ship_name=""):
         self.mmsi = str(mmsi)
         self.lon = lon
         self.lat = lat
@@ -26,6 +28,7 @@ class AisRecord:
         self.receive_timestamp = receive_timestamp
         self.source_topic = source_topic
         self.decode_status = decode_status
+        self.ship_name = ship_name or ""
 
     def to_dict(self):
         return {
@@ -39,6 +42,7 @@ class AisRecord:
             "receive_timestamp": self.receive_timestamp,
             "source_topic": self.source_topic,
             "decode_status": self.decode_status,
+            "ship_name": self.ship_name,
         }
 
 
@@ -54,30 +58,53 @@ class AisStore:
         self.parse_ok = 0
         self.parse_fail = 0
         self.msg_type_counts = {}
+        self._names = {}  # mmsi -> ship_name（静态数据报告缓存）
 
     def update(self, mmsi, lon, lat, speed, course, heading=511,
-               ais_timestamp=None, source_topic="", decode_status="ok"):
+               ais_timestamp=None, source_topic="", decode_status="ok",
+               ship_name=""):
         with self._lock:
             recv_ts = time.time()
-            if len(self._data) >= self._max and str(mmsi) not in self._data:
+            mmsi = str(mmsi)
+            if len(self._data) >= self._max and mmsi not in self._data:
                 oldest = min(self._data, key=lambda k: self._data[k].receive_timestamp)
                 del self._data[oldest]
-            self._data[str(mmsi)] = AisRecord(
+            if not ship_name:
+                ship_name = self._names.get(mmsi, "")
+            self._data[mmsi] = AisRecord(
                 mmsi, lon, lat, speed, course, heading,
-                ais_timestamp, recv_ts, source_topic, decode_status
+                ais_timestamp, recv_ts, source_topic, decode_status, ship_name
             )
+
+    def update_ship_name(self, mmsi, ship_name):
+        """更新/缓存船名（来自 type-5/24 静态数据报告或 JSON）。"""
+        with self._lock:
+            mmsi = str(mmsi)
+            self._names[mmsi] = ship_name
+            rec = self._data.get(mmsi)
+            if rec is not None and not rec.ship_name:
+                rec.ship_name = ship_name
 
     def update_from_decoded(self, decoded):
         """从解码器输出更新缓存。"""
         with self._lock:
             self.msg_count += 1
-        if decoded is None or "lon" not in decoded:
+        if decoded is None:
             with self._lock:
                 self.parse_fail += 1
             return
         mtype = decoded.get("msg_type", 0)
         with self._lock:
             self.msg_type_counts[mtype] = self.msg_type_counts.get(mtype, 0) + 1
+        mmsi = str(decoded.get("mmsi", ""))
+        ship_name = decoded.get("ship_name", "")
+        if ship_name:
+            self.update_ship_name(mmsi, ship_name)
+        if "lon" not in decoded:
+            # 仅静态数据（如 type-5/24 船名），无位置：视为成功解析
+            with self._lock:
+                self.parse_ok += 1
+            return
         self.update(
             decoded["mmsi"],
             decoded["lon"], decoded["lat"],
@@ -87,6 +114,7 @@ class AisStore:
             decoded.get("timestamp"),
             decoded.get("source_topic", ""),
             decoded.get("decode_status", "ok"),
+            ship_name or "",
         )
         with self._lock:
             self.parse_ok += 1

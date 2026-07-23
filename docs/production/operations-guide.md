@@ -606,6 +606,31 @@ sudo systemctl disable hangzhouwan.target
 
 ---
 
+### 18.7 融合信息文字叠加 + 船名解码 + 健康状态稳定
+
+- **问题**：BMCV 绘制路径仅画彩色矩形（`bmcv_image_draw_rectangle`），无融合文字，
+  推流画面只有检测框、无 MMSI/速度等融合信息；健康状态在无检测帧时闪烁为
+  `DETECTION_ONLY`；AIS type-5/24 静态报告（船名）被丢弃，多分片 AIVDM 无法解码。
+- **修复**：
+  - `src/image_io/jpeg_io.cpp`/`.h`：新增 `draw_label_nv12()`，在 NV12 Y 分量上直接
+    绘制黑底白字标签（UV 置中性 128），并扩展内置 5x7 位图字体（A-Z、`:`、`-`，
+    大小写不敏感）。
+  - `src/pipeline/single_stream_pipeline.cpp`：BMCV 绘制分支在画矩形后对每个检测框
+    调用 `draw_label_nv12`，标签为 `MMSI:<mmsi> S:<speed> [ship_name]`（仅 ASCII 船名）。
+  - `src/business/business_enrichment_client.cpp`：`enrich()` 空结果（本帧无检测框）时
+    保持当前状态，不再误判为 `DETECTION_ONLY`，消除健康状态闪烁。
+  - `services/business_enrichment/ais/decoder.py`：解码 type-5/24 提取 `shipname`；
+    `_decode_json()` 提取 `dtu_shui_yu` 的 `shipName`。
+  - `services/business_enrichment/ais/subscriber.py`：多分片 AIVDM 重组（按 seq/channel
+    缓冲，齐片后拼接 payload 解码），未齐分片不计入解析统计。
+  - `services/business_enrichment/ais/store.py`：`AisRecord` 增加 `ship_name`，新增
+    `_names` 缓存与 `update_ship_name()`，位置更新合并已知船名；type-5 计为解析成功
+    （fail 率从 ~15% 降至 ~6%）。
+- **部署**：就地热修补丁至 `/opt/hangzhouwan/current`（二进制 + Python 模块），
+  备份在 `/var/log/hangzhouwan/hotfix-backup-20260723114513/`。
+- **已知限制**：CJK 船名在叠加层以 `MMSI+速度` 显示（仅 ASCII 船名可渲染），
+  完整中文叠加需 CJK 字体 + FreeType（后续）。船名需等 type-5 静态报告到达（约 6 分钟周期）。
+
 ## 19. 生产环境系统配置
 
 ### journald 日志限制

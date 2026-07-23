@@ -61,6 +61,13 @@ void draw_text(Image& img, int x, int y, const std::string& text,
 void draw_label(Image& img, int x1, int y1, const std::string& text,
                 Color box_color, int scale = 2);
 
+// 在 NV12 帧（Y + 交错 UV）上直接绘制黑底白字标签（BMCV 路径用）。
+// y_plane/uv_plane 为帧数据，*_stride 为行步长，width/height 为帧尺寸。
+void draw_label_nv12(uint8_t* y_plane, int y_stride,
+                     uint8_t* uv_plane, int uv_stride,
+                     int width, int height,
+                     int x1, int y1, const std::string& text, int scale = 2);
+
 }  // namespace hzw
 
 #endif  // HZW_IMAGE_IO_JPEG_IO_H

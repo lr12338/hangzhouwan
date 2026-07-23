@@ -693,6 +693,26 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
         if (!bmcv_.draw_colored_rectangles(f, rects, berr)) {
           set_error(10, "BMCV 绘制失败: " + berr);
         }
+        // 融合信息文字（BMCV 仅画矩形，文字在 host NV12 上补绘）
+        for (const auto& e : esnap.detections) {
+          char label[160];
+          if (e.ais_matched && !e.mmsi.empty()) {
+            if (!e.ship_name.empty()) {
+              std::snprintf(label, sizeof(label), "MMSI:%s S:%.1f %s",
+                            e.mmsi.c_str(), e.speed, e.ship_name.c_str());
+            } else {
+              std::snprintf(label, sizeof(label), "MMSI:%s S:%.1f",
+                            e.mmsi.c_str(), e.speed);
+            }
+          } else {
+            std::snprintf(label, sizeof(label), "ship %.2f", e.score);
+          }
+          draw_label_nv12(f->data[0], f->linesize[0],
+                          f->data[1], f->linesize[1],
+                          source_w_, source_h_,
+                          static_cast<int>(e.x1), static_cast<int>(e.y1),
+                          label, 2);
+        }
       }
       metrics_.record_draw_ms(ms_between(tdraw, now_ms()));
     }
