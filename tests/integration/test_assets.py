@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""资产离线检查（中文日志）。基于真实本地仓库核验模型、坐标模型、字体、
+"""资产离线检查（中文日志）。基于真实本地仓库核验模型、坐标模型、
 测试视频的存在性与可读性。不连接任何正式服务。"""
 import os
 import sys
@@ -8,7 +8,7 @@ import subprocess
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-WEIGHTS = os.path.join(REPO, "hangzhouwan_beishang", "weights")
+WEIGHTS = os.path.join(REPO, "weights")
 TESTDATA = os.path.join(REPO, "testdata")
 
 IGNORED_MODEL_FILES = [
@@ -39,11 +39,6 @@ class AssetInventoryTest(unittest.TestCase):
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             self.assertNotEqual(0, tracked.returncode, f"模型文件被 Git 跟踪：{m}")
 
-    def test_chinese_font_present(self):
-        font = os.path.join(WEIGHTS, "simhei.ttf")
-        self.assertTrue(os.path.exists(font), "中文字体 simhei.ttf 缺失")
-        self.assertGreater(os.path.getsize(font), 100000, "字体文件过小，可能损坏")
-
     def test_test_video_present_and_decodable(self):
         video = os.path.join(TESTDATA, "test.mp4")
         self.assertTrue(os.path.exists(video), "测试视频 test.mp4 缺失")
@@ -62,15 +57,16 @@ class AssetInventoryTest(unittest.TestCase):
         self.assertIn("height=544", out)
 
     def test_no_project_test_image(self):
-        # 仅 nginx-rtmp-module 自带 bg.jpg，项目无独立“入库”测试图片。
+        # 项目无独立"入库"测试图片。
         # 校准帧 testdata/calibration/*.jpg 为 gitignore 的派生资产，不计入。
+        # 历史 nginx 目录已移除，无入库项目图片。
         r = subprocess.run(
             ["git", "-C", REPO, "ls-files"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         tracked = [ln for ln in r.stdout.splitlines() if ln]
         project_imgs = [
             p for p in tracked
-            if p.lower().endswith((".jpg", ".jpeg", ".png")) and "nginx" not in p
+            if p.lower().endswith((".jpg", ".jpeg", ".png"))
         ]
         self.assertEqual([], project_imgs, f"发现入库项目测试图片（应在 fixtures 显式管理）：{project_imgs}")
 

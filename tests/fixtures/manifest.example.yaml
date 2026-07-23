@@ -11,26 +11,22 @@ fixtures:
     duration_seconds: 125.35
     note: 仓库自带测试视频，可被 Sophon-FFmpeg 解码
 
-  - id: chinese_font
-    type: font
-    path: hangzhouwan_beishang/weights/simhei.ttf
-    sha256: aa4560dd8fe5645745fed3ffa301c3ca4d6c03cbd738145b613303961ba733b8
-    note: 中文字体，生产直接复用
+  # 中文字体 simhei.ttf 已随 Windows 原型移除；生产 C++ 使用内置位图字体
 
 # 缺失资产（需在 x86 / 原始 Windows 机器补齐）
 missing:
   - id: best_onnx
     type: model
-    expected_path: hangzhouwan_beishang/weights/best.onnx
+    expected_path: weights/best.onnx
     status: absent
     note: YOLOv7 单类 ship 检测模型，被 .gitignore 排除，未入库
   - id: coordinate_model_a
     type: model
-    expected_path: hangzhouwan_beishang/weights/0121_random_forest_model.pkl
+    expected_path: weights/0121_random_forest_model.pkl
     status: absent
     note: A 路坐标随机森林模型
   - id: coordinate_model_b
     type: model
-    expected_path: hangzhouwan_beishang/weights/beishang_x-l.pkl
+    expected_path: weights/beishang_x-l.pkl
     status: absent
     note: B 路坐标随机森林模型

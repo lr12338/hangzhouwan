@@ -2,7 +2,7 @@
 // =============================================================================
 // DetectionRegionFilter：禁区过滤（阶段4.3）。
 //
-// 旧 Python 语义审计（hangzhouwan_beishang/utils_demo/method.py）：
+// 旧 Python 语义审计（历史 hangzhouwan_beishang/utils_demo/method.py，已移除）：
 //   - 使用检测框中心点（(x1+x2)/2, (y1+y2)/2），不是框边缘。
 //   - 使用包含关系（中心点是否在禁区内），不是交集。
 //   - 过滤发生在 NMS 后、绘框前。

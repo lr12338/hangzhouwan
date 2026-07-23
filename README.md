@@ -36,12 +36,12 @@
 
 ## 3. 当前状态摘要
 
-- **阶段1 通过**：源码已解除对明文凭据、Windows 路径、固定生产地址的依赖；新增中文日志、配置校验、脱敏器、测试框架；26 项离线测试全部通过。
+- **阶段1 通过**：源码已解除对明文凭据、Windows 路径、固定生产地址的依赖；新增中文日志、配置校验、脱敏器、测试框架；离线测试全部通过（运行 `python3 tests/run_tests.py` 或 `python3 -m pytest tests/`）。
 - **阶段2 完成**：ONNX 审计通过；F32 bmodel 已生成（`artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`，24,428,544 字节，SHA256 `d1c295c5...`）；ONNX/MLIR 172 个 Tensor 数值验证通过；bmodel 已提交至 Git（`9255f27`）。
 - **阶段2B 完成**：`bmrt_test` 和 `bmrt_load_test` 在板端真实加载成功，网络 `yolov7_ship`，输入 `images [1,3,640,640] FLOAT32`，输出 `output_Concat [1,25200,6] FLOAT32`，无兼容性错误，TPU 资源正常释放。
-- **阶段3 完成**：C++ 单图推理 PoC 完成（BmrtDetector + YOLOv7 后处理 + 绘框），预处理 56ms，推理 16ms，后处理 0.6ms；100 次重复推理平均 15.99ms，框数稳定，无内存泄漏；10 项 C++ 单元测试和 26 项 Python 测试全部通过。
+- **阶段3 完成**：C++ 单图推理 PoC 完成（BmrtDetector + YOLOv7 后处理 + 绘框），预处理 56ms，推理 16ms，后处理 0.6ms；100 次重复推理平均 15.99ms，框数稳定，无内存泄漏；C++ 单元测试和 Python 测试全部通过（`cd build && ctest` + `python3 -m pytest tests/`）。
 - **阶段4 进行中**：单路硬件视频管线功能通过；BMCV 绘制优化（`--draw-mode bmcv`）消除 sws 往返瓶颈，输出达 10fps；短时 300s 验证通过（10.003fps，退出码 0，RSS +356KB，P95=150ms 稳定，无残留）；完整 30min/2h 长时门禁待人工执行。
-- **阶段4.2 进行中**：单路 RTSP 输入（`--source-type rtsp --input-env HZW_TEST_RTSP_URL`）已实现连接/读取超时（`stimeout`）、受控断线重连（指数退避）、URL 凭据脱敏、停止信号中断阻塞、输出 PTS 单调；`ctest` 8 项 + Python 29 项全通过，20s 文件回归通过，受控无效地址连接路径验证通过；实流与长时门禁待人工执行。
+- **阶段4.2 进行中**：单路 RTSP 输入（`--source-type rtsp --input-env HZW_TEST_RTSP_URL`）已实现连接/读取超时（`stimeout`）、受控断线重连（指数退避）、URL 凭据脱敏、停止信号中断阻塞、输出 PTS 单调；`ctest` + Python 测试全通过，20s 文件回归通过，受控无效地址连接路径验证通过；实流与长时门禁待人工执行。
 
 ## 3.5 生产运维文档
 
@@ -67,13 +67,13 @@
 cd /home/linaro/hangzhouwan
 git switch feat/bm1684-edge-deployment
 
-# 运行离线测试（26 项，纯标准库，无需 pip install）
+# 运行离线测试（纯标准库，无需 pip install）
 python3 tests/run_tests.py
 
 # C++ 构建与测试
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
-ctest --test-dir build --output-on-failure
+cd build && ctest --output-on-failure
 
 # 单图推理
 LD_LIBRARY_PATH=/opt/sophon/libsophon-0.4.9/lib \
@@ -90,7 +90,7 @@ python3 tools/inspect_onnx.py weights/best.onnx
 python3 tools/validate_config.py config/application.example.yaml
 
 # 敏感信息扫描
-python3 tools/redact_secrets.py --scan hangzhouwan_beishang/
+python3 tools/redact_secrets.py --scan .
 ```
 
 ### 板端 C++ 加载程序（须有 bmodel）
@@ -158,14 +158,15 @@ hangzhouwan/
 │   ├── unit_cpp/                      # C++ 单元测试（阶段3新增）
 │   └── run_tests.py                   # 测试入口
 ├── testdata/                          # 测试数据
-│   ├── test.mp4                       # 测试视频（960×544, 125s）
-│   └── model_test/                    # 测试帧（阶段3新增）
-├── hangzhouwan_beishang/              # 原始 Python 源码（迁移源）
-│   ├── detector.py                    # 原始 YOLOv7 检测器（预处理/后处理参考）
-│   └── ...
-└── weights/                           # 模型文件（gitignore）
-    ├── best.onnx                      # 原始 ONNX（阶段2 补齐）
-    └── ...
+│   └── test.mp4                       # 测试视频（960×544, 125s）
+├── artifacts/                         # 模型资产（bmodel 入库，其余 gitignore）
+│   └── bm1684-f32/yolov7_ship_1684_f32.bmodel
+├── deploy/                            # 部署脚本与 systemd unit
+├── services/                          # Business 富化 Python 服务
+└── weights/                           # 模型文件（gitignore，不入库）
+    ├── best.onnx                      # 原始 ONNX（本地存在）
+    ├── 0121_random_forest_model.pkl   # A 路坐标模型
+    └── beishang_x-l.pkl               # B 路坐标模型
 ```
 
 ## 6. 执行红线

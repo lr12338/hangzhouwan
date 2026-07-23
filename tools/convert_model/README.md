@@ -13,7 +13,7 @@
 ## 前置条件（x86）
 
 - TPU-MLIR 官方固定版本镜像（容器内 `model_transform.py`、`model_deploy.py`、`model_tool` 可用）；
-- 仓库已含 `hangzhouwan_beishang/weights/best.onnx` 与至少一张本地验证图片（默认从 `testdata/calibration/` 选择）。
+- 仓库已含 `weights/best.onnx` 与至少一张本地验证图片（默认从 `testdata/calibration/` 选择）。
 
 ## 转换参数（来自 ONNX 审计，见 `docs/06`）
 

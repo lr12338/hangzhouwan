@@ -5,7 +5,7 @@
 // 模型实际输出：[1, 25200, 6]，每行 6 个值按原 Python 解释为：
 //   cx, cy, width, height, object_confidence, class_confidence
 //
-// 语义保持与 hangzhouwan_beishang/detector.py 的 process_output 一致：
+// 语义保持与历史 Python 原型（hangzhouwan_beishang/detector.py，已移除）的 process_output 一致：
 //   1) object_confidence > conf_threshold  过滤
 //   2) score = object_confidence * class_confidence
 //   3) score > conf_threshold             过滤

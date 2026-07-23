@@ -1,7 +1,7 @@
 # 依赖分类说明
 
-原仓库的 `hangzhouwan_beishang/requirements.txt`、`环境requirements.txt`、
-`yolov7_requirements.txt` 存在大量冲突 pin（numpy / torch / paho_mqtt / pyais /
+历史仓库的 Windows conda freeze（`hangzhouwan_beishang/requirements.txt`、
+`环境requirements.txt`、`yolov7_requirements.txt`，均已移除）存在大量冲突 pin（numpy / torch / paho_mqtt / pyais /
 Pillow 重复且版本不一致）与 Windows conda freeze（含 `file:///C:/...` 本地路径），
 **不能作为 BM1684 工控机的安装依据**。本目录按用途重新分类。
 

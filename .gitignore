@@ -25,7 +25,6 @@ output/
 *.zip
 *.rar
 ffmpeg/
-nginx 1.7.11.3 Gryphon/
 
 # ===== 模型与坐标标定文件（大文件，按设计不入库） =====
 *.pkl
@@ -61,8 +60,6 @@ venv/
 Thumbs.db
 
 # 运行时产物（含历史日志，可能嵌入凭据，不入库）
-hangzhouwan_beishang/output.txt
-hangzhouwan_beishang/error.txt
 
 # INT8 校准帧（由 test.mp4 派生，可由脚本再生，不入库）
 testdata/calibration/*.jpg
