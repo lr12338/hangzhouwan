@@ -160,3 +160,5 @@ systemctl is-active hangzhouwan-video
 - 新仓库 remote：`git@github.com:lr12338/hangzhouwan.git`
 - 生产服务状态：迁移前后均为 active，无需重启
 - 生产运行路径：未切换（服务始终运行在 `/opt/hangzhouwan/current`）
+- 迁移提交：`4e604fc`（chore: 整理项目目录并统一生产运维路径）
+- 迁移后验证：87 项 Python 单元测试通过，preflight 42 项通过，生产服务 HEALTHY
