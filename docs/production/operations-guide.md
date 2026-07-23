@@ -1,8 +1,8 @@
 # 杭州湾双路检测系统 · 生产运维手册
 
 > 本文档为 BM1684 板端生产部署的主要操作参考，可直接复制执行。
-> 适用版本：阶段7 Release（`202607221953-3dfcf4e` 及之后）。
-> **红线：不自动 enable 开机启动；不关闭 Windows 旧服务；不覆盖 Windows 正式 RTMP 地址。**
+> 适用版本：阶段7 Release（`202607221953-3dfcf4e`，含热修补丁）。
+> **当前状态：已替代 Windows 旧服务，双路推流正式地址，生产运行中。**
 
 ---
 
@@ -15,7 +15,7 @@ hangzhouwan.target
 ```
 
 - **Business**：Python sidecar，负责坐标预测（sklearn）、MQTT AIS 订阅/缓存、视觉-AIS 匹配、JSONL 事件输出。
-- **Video**：C++ `dual_stream_app`，负责双路 RTSP 接入、h264_bm 硬解、BMCV 预处理、BMRuntime 推理、禁区过滤、融合快照绘制、h264_bm 硬编、灰度 RTMP 推流。
+- **Video**：C++ `dual_stream_app`，负责双路 RTSP 接入、h264_bm 硬解、BMCV 预处理、BMRuntime 推理、禁区过滤、融合快照绘制、h264_bm 硬编、RTMP 推流。
 - 两者通过 Unix Domain Socket 通信。
 - Business 异常时 Video 自动降级为 `DETECTION_ONLY`（仅检测，无坐标/AIS），Business 恢复后自动恢复业务融合。
 
@@ -28,7 +28,33 @@ hangzhouwan.target
 
 ---
 
-## 2. 目录结构
+## 2. 当前生产配置
+
+### 推流地址（正式地址，已替代 Windows 旧服务）
+
+| 流 | RTSP 输入 | RTMP 输出 |
+|---|---|---|
+| A 路（南下） | `rtsp://admin:***@112.16.184.176:48554/streaming/Channels/801` | `rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth8_1` |
+| B 路（北上） | `rtsp://admin:***@112.16.184.176:48554/streaming/Channels/301` | `rtmp://hangzhouwanpush.hifleet.com:1935/HangZhouBridge/HangZhouBridgeNorth3_1` |
+
+> RTSP/RTMP 凭据通过 `/etc/hangzhouwan/video.env` 注入，不写入 application.yaml。
+
+### AIS 订阅
+
+- MQTT Broker：`iot.hifleet.com:1883`
+- 订阅主题：`upAIS/#`（通配符，接收所有 AIS 基站数据）
+- 原 `upAIS/base_2250`、`upAIS/base_2251` 基站已离线，改用通配符订阅
+- `upAIS/dtu_shui_yu` 主题发送 JSON 格式 AIS 数据（非 AIVDM），解码器已增加 JSON 解析支持
+
+### 已知限制
+
+- B 路 `Channels/301` 摄像头偶尔返回 400 Bad Request（摄像头端固件问题），重连后可恢复
+- AIS 匹配半径 500m，仅匹配摄像头视野内的船舶；远处 AIS 船舶不误匹配
+- `kern.log` 因 VPU clock 开关日志刷屏，已通过 journald 限制 + rsyslog 轮转控制
+
+---
+
+## 3. 目录结构
 
 | 路径 | 说明 |
 |---|---|
@@ -39,6 +65,7 @@ hangzhouwan.target
 | `/etc/hangzhouwan/business.env` | Business 环境变量（MQTT 凭据等，权限 640） |
 | `/etc/hangzhouwan/video.env` | Video 环境变量（RTSP/RTMP URL 等，权限 640） |
 | `/etc/tmpfiles.d/hangzhouwan.conf` | 共享运行目录 tmpfiles.d 配置 |
+| `/etc/systemd/journald.conf.d/size.conf` | journald 日志大小限制（50M） |
 | `/run/hangzhouwan/business.sock` | Business Sidecar Unix Socket |
 | `/run/hangzhouwan/video-health.sock` | Video 结构化健康接口 Socket |
 | `/var/log/hangzhouwan/` | 日志和诊断包目录 |
@@ -60,9 +87,11 @@ Release 目录结构：
 └── sha256sum.txt             # 完整性校验
 ```
 
+> ⚠️ 当前 Release 含热修补丁（见第 18 节），manifest.json SHA256 已失效。下次正式构建 Release 时需重新生成。
+
 ---
 
-## 3. 启动服务
+## 4. 启动服务
 
 ### 启动全部（通过 target）
 
@@ -88,7 +117,7 @@ sudo systemctl start hangzhouwan-video.service
 
 ---
 
-## 4. 停止服务
+## 5. 停止服务
 
 ```bash
 # 停止全部
@@ -107,7 +136,7 @@ pgrep -af 'dual_stream_app|business_enrichment' || true
 
 ---
 
-## 5. 重启服务
+## 6. 重启服务
 
 ```bash
 # 全部重启
@@ -126,26 +155,7 @@ sudo systemctl restart hangzhouwan-business.service
 
 ---
 
-## 6. 查看 systemd 状态
-
-```bash
-systemctl status hangzhouwan.target --no-pager -l
-systemctl status hangzhouwan-business.service --no-pager -l
-systemctl status hangzhouwan-video.service --no-pager -l
-```
-
-精简状态：
-
-```bash
-systemctl is-active hangzhouwan-business.service
-systemctl is-active hangzhouwan-video.service
-systemctl is-failed hangzhouwan-business.service
-systemctl is-failed hangzhouwan-video.service
-```
-
----
-
-## 7. 使用 hzwctl 检查状态
+## 7. 查看系统状态
 
 ```bash
 # 系统状态汇总（优先读 Video 健康接口）
@@ -258,6 +268,19 @@ ls "/proc/$VIDEO_PID/fd" | wc -l
 grep -E 'Threads|VmRSS|VmSize' "/proc/$VIDEO_PID/status"
 ```
 
+### 生产环境资源基线（2.6G 内存 / 无 Swap）
+
+| 指标 | 正常范围 | 说明 |
+|---|---|---|
+| Video RSS | 30-40 MB | C++ 进程，稳定不增长 |
+| Business RSS | 100-120 MB | Python 进程，含 AIS 缓存 |
+| Video FD | <50 | 24 `/dev` + 9 socket + 少量文件 |
+| Video 线程 | 17 | 固定 |
+| Business 线程 | 14 | 固定 |
+| 根分区使用 | <80% | journald 限制 50M，JSONL 轮转 50M×10 |
+| /opt 使用 | <30% | Release 制品 |
+| loadavg | <3.0 | 双路推理满载约 1 核 |
+
 ---
 
 ## 10. 查看 Socket
@@ -291,6 +314,33 @@ sudo systemctl restart hangzhouwan.target
 ```
 
 > 配置文件不含明文密码。RTSP/RTMP/MQTT 凭据通过环境变量注入（`/etc/hangzhouwan/business.env` 和 `video.env`）。
+
+### 当前 application.yaml 关键配置
+
+```yaml
+# 推流：正式地址（forbidden_formal_outputs 已清空）
+deploy:
+  forbidden_formal_outputs: []
+
+# AIS 订阅：通配符（base_2250/2251 已离线）
+mqtt:
+  topics: ["upAIS/#"]
+
+# 推理
+inference:
+  model_path: /opt/hangzhouwan/current/models/yolov7_ship_1684_f32.bmodel
+  confidence_threshold: 0.1
+  iou_threshold: 0.1
+
+# 坐标预测
+business:
+  coordinate_mode: sklearn
+  model_a_path: /opt/hangzhouwan/current/models/0121_random_forest_model.pkl
+  model_b_path: /opt/hangzhouwan/current/models/beishang_x-l.pkl
+  ais_max_distance_m:
+    A: 500
+    B: 500
+```
 
 ---
 
@@ -333,6 +383,8 @@ readlink -f /opt/hangzhouwan/current   # 应指向新 Release
 /opt/hangzhouwan/current/bin/hzwctl status
 ```
 
+> ⚠️ 升级时需重新构建含热修补丁的 Release（见第 18 节），否则会丢失 decoder.py、sklearn_predictor.py 修复和 e2e_p95 健康接口修复。
+
 ---
 
 ## 14. 手动回滚
@@ -351,58 +403,38 @@ sudo bash /opt/hangzhouwan/current/tools/release/rollback_release.sh
 
 ---
 
-## 15. 收集诊断包
+## 15. 回切到 Windows 旧服务
 
-```bash
-/opt/hangzhouwan/current/bin/hzwctl collect-diagnostics
-```
+如果 BM1684 系统出现不可恢复的故障，回切到 Windows 旧服务：
 
-诊断包保存在 `/var/log/hangzhouwan/diagnostics/diag_<timestamp>.txt`，包含：
-- systemctl status（Business/Video/target）
-- journal 最近 100 行日志
-- Sidecar 健康状态
-- Video 健康 Socket 状态
-- 进程列表
-- 磁盘空间
-- TPU 状态
-
-> **诊断包不得提交 Git**。`/var/log/hangzhouwan/` 已在 `.gitignore` 中排除。
+1. 在 Windows 机器上启动旧服务，推流到正式 RTMP 地址
+2. 停止 BM1684：
+   ```bash
+   sudo systemctl stop hangzhouwan.target
+   ```
+3. 确认 Windows 推流正常，正式地址可拉流
+4. BM1684 保留待修复，不影响 Windows 服务
 
 ---
 
-## 16. 常见故障处理
+## 16. 常见问题排查
 
-### Business 启动失败
+### A 路无输出
 
-- **现象**：`systemctl is-active hangzhouwan-business.service` 返回 `failed`
-- **检查**：`journalctl -u hangzhouwan-business.service -n 50 --no-pager`
-- **可能原因**：MQTT 不可达、坐标模型加载失败、Python 依赖缺失、配置文件错误
-- **恢复**：修复后 `sudo systemctl restart hangzhouwan-business.service`
-- **影响 Video**：Video 降级为 DETECTION_ONLY，推流不中断
-
-### Video readiness 失败
-
-- **现象**：`hzwctl wait-video` 超时
-- **检查**：`journalctl -u hangzhouwan-video.service -n 50 --no-pager`
-- **可能原因**：Business 未就绪（ExecStartPre 失败）、bmodel 加载失败、TPU 不可用
-- **恢复**：先确保 Business 就绪，再 `sudo systemctl restart hangzhouwan-video.service`
-- **影响 Business**：不影响
-
-### RTSP 连接失败
-
-- **现象**：日志显示 `RTSP 连接失败` 或 `stimeout`
-- **检查**：`journalctl -u hangzhouwan-video.service | grep RTSP`
-- **可能原因**：网络不通、摄像头离线、凭据错误、RTSP URL 变更
-- **恢复**：检查 `/etc/hangzhouwan/video.env` 中的 `STREAM_*_INPUT_URL`，验证网络连通性
+- **现象**：`hzwctl health` 显示 A 路 `rtmp_connected: false` 或 `output_fps: 0`
+- **检查**：`journalctl -u hangzhouwan-video.service | grep 'A.*RTSP'`
+- **可能原因**：RTSP 连接失败、RTMP 服务器不可达
+- **恢复**：检查 `video.env` 中的 `STREAM_A_INPUT_URL` 和 `STREAM_A_OUTPUT_URL`，验证 RTMP 服务器
 - **影响**：该路无输出，另一路不受影响
 
-### RTMP 推流失败
+### B 路 400 Bad Request
 
-- **现象**：日志显示 `RTMP 失败` 或重连
-- **检查**：`journalctl -u hangzhouwan-video.service | grep RTMP`
-- **可能原因**：RTMP 服务器不可达、推流 Key 错误、端口被占用
-- **恢复**：检查 `STREAM_*_OUTPUT_URL`，验证 RTMP 服务器
-- **影响**：该路无输出，另一路不受影响
+- **现象**：B 路 `rtsp_connected: false`，日志显示 `Server returned 400 Bad Request`
+- **检查**：`journalctl -u hangzhouwan-video.service | grep '400'`
+- **可能原因**：摄像头端 `Channels/301` 通道固件问题
+- **恢复**：重启 Video 服务触发重连；若持续失败需现场检查摄像头配置
+- **替代通道**：`101/201/401/501/701/801` 可用（需确认画面方向）
+- **影响**：仅影响 B 路，A 路不受影响
 
 ### MQTT 未连接
 
@@ -416,9 +448,17 @@ sudo bash /opt/hangzhouwan/current/tools/release/rollback_release.sh
 
 - **现象**：`hzwctl health` 显示 `ais_cache_count: 0`
 - **检查**：`journalctl -u hangzhouwan-business.service | grep AIS`
-- **可能原因**：MQTT 未连接、当前无船经过、AIS 主题错误
-- **恢复**：确认 MQTT 连接正常，等待有船经过
+- **可能原因**：MQTT 未连接、通配符订阅未生效、AIS broker 无数据
+- **恢复**：确认 `business.env` 中 `AIS_MQTT_TOPICS=upAIS/#`；确认 MQTT 连接正常
 - **影响**：坐标预测正常（COORD_ONLY），但无 AIS 匹配
+
+### AIS 数据有缓存但无匹配
+
+- **现象**：AIS 缓存 >0 但 JSONL 中 `ais_matched: false`
+- **检查**：确认 AIS 船舶是否在摄像头视野 500m 范围内
+- **可能原因**：AIS 船舶距离过远（匹配半径 500m），或当前视野内无 AIS 船舶
+- **恢复**：属正常行为，有 AIS 船舶经过视野时自动匹配
+- **影响**：无
 
 ### 坐标模型加载失败
 
@@ -458,14 +498,6 @@ sudo bash /opt/hangzhouwan/current/tools/release/rollback_release.sh
 - **恢复**：重启工控机或重新加载驱动
 - **影响**：Video 无法推理
 
-### B 路频繁重连
-
-- **现象**：B 路 `rtsp_reconnects` 持续增加
-- **检查**：`journalctl -u hangzhouwan-video.service | grep 'B.*RTSP'`
-- **可能原因**：B 路摄像头返回 400 Bad Request（已知问题）或网络不稳定
-- **恢复**：检查摄像头状态和网络
-- **影响**：仅影响 B 路，A 路不受影响
-
 ### Video 进入 DETECTION_ONLY
 
 - **现象**：`hzwctl health` 显示 `business_state: DETECTION_ONLY`
@@ -477,8 +509,13 @@ sudo bash /opt/hangzhouwan/current/tools/release/rollback_release.sh
 ### 磁盘空间不足
 
 - **现象**：日志显示磁盘告警或服务异常
-- **检查**：`df -h`、`du -sh /var/log/hangzhouwan/ /var/lib/hangzhouwan/`
-- **恢复**：清理旧诊断包和 JSONL 文件
+- **检查**：`df -h`、`du -sh /var/log/ /var/lib/hangzhouwan/`
+- **可能原因**：`kern.log` VPU clock 日志刷屏、journal 累积、JSONL 未轮转
+- **恢复**：
+  ```bash
+  sudo truncate -s 0 /var/log/kern.log
+  sudo journalctl --vacuum-size=50M
+  ```
 - **影响**：可能导致日志写入失败
 
 ### systemd 重启风暴
@@ -521,3 +558,84 @@ sudo systemctl disable hangzhouwan.target
 ```
 
 > **禁止在完成 L4 24 小时长测和 Windows 回切演练前 enable。**
+
+---
+
+## 18. 热修补丁清单
+
+> 以下补丁已就地应用到 Release `202607221953-3dfcf4e`，源码已提交到 Git 工作区。
+> 下次正式构建 Release 时需确保这些补丁包含在内。
+
+### 18.1 AIS 解码器增加 JSON 格式支持
+
+- **文件**：`services/business_enrichment/ais/decoder.py`
+- **问题**：`upAIS/dtu_shui_yu` 主题发送 JSON 格式 AIS 数据（`{"mmsi":..., "longitude":..., "latitude":...}`），原解码器仅支持 AIVDM NMEA 格式
+- **修复**：`PyAisDecoder` 新增 `_decode_json()` 方法，自动检测 `{` 开头的 payload 并解析 JSON
+
+### 18.2 AIS 订阅改用通配符
+
+- **文件**：`/etc/hangzhouwan/business.env`、`/etc/hangzhouwan/application.yaml`
+- **问题**：原订阅 `upAIS/base_2250`、`upAIS/base_2251` 基站已离线，60 秒内 0 条消息
+- **修复**：改用 `upAIS/#` 通配符订阅所有 AIS 主题，缓存上限 500 + 30 秒超时自动清理
+
+### 18.3 sklearn 特征名警告消除
+
+- **文件**：`services/business_enrichment/coordinate/sklearn_predictor.py`
+- **问题**：模型训练时用了 DataFrame 特征名，预测时传 numpy 数组导致每次推理刷 `UserWarning`
+- **修复**：`load()` 后 `delattr(model, "feature_names_in_")` 消除警告
+
+### 18.4 健康接口 e2e_p95_ms 修复
+
+- **文件**：`include/monitoring/pipeline_metrics.h`、`src/application/dual_stream_application.cpp`
+- **问题**：`PipelineMetrics::p95()` 是 private，健康状态 `e2e_p95_ms` 恒为 0
+- **修复**：新增 public `e2e_p95()`/`infer_p95()`/`queue_length()` 访问器（带 mutex），在健康状态中填充实际值
+
+### 18.5 推流地址切换为正式地址
+
+- **文件**：`/etc/hangzhouwan/video.env`、`/etc/hangzhouwan/application.yaml`
+- **变更**：`STREAM_*_OUTPUT_URL` 去掉 `_bm1684` 后缀，`forbidden_formal_outputs` 清空为 `[]`
+- **说明**：BM1684 已替代 Windows 旧服务，直接推流到正式 RTMP 地址
+
+### 18.6 系统级优化
+
+- **journald 限制**：`/etc/systemd/journald.conf.d/size.conf` 配置 `SystemMaxUse=50M`
+- **Docker 移除**：生产环境已卸载 Docker（无容器运行），释放磁盘 230MB + 内存 37MB
+- **Cursor Server 移除**：生产环境已移除远程开发工具，释放内存 670MB + 磁盘 200MB
+- **BSP 安装包清理**：`/home/linaro/bsp-debs` 已删除，释放 273MB
+
+---
+
+## 19. 生产环境系统配置
+
+### journald 日志限制
+
+```bash
+# /etc/systemd/journald.conf.d/size.conf
+[Journal]
+SystemMaxUse=50M
+MaxFileSec=1week
+```
+
+### 磁盘空间维护
+
+根分区 5.8G，已优化至 71% 使用率。定期检查：
+
+```bash
+df -h /
+du -sh /var/log/ /var/lib/hangzhouwan/
+```
+
+如 `kern.log` 膨胀（VPU clock 日志刷屏）：
+
+```bash
+sudo truncate -s 0 /var/log/kern.log
+sudo journalctl --vacuum-size=50M
+```
+
+### 已移除的非生产组件
+
+| 组件 | 原因 | 释放 |
+|---|---|---|
+| Docker | 无容器运行 | 磁盘 230M + 内存 37M |
+| Cursor Server | 远程开发工具，非生产 | 磁盘 200M + 内存 670M |
+| BSP 安装包 | 安装后无用 | 磁盘 273M |

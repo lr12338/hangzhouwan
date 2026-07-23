@@ -90,7 +90,7 @@ B 路修复前 2.48fps，修复后（jitter buffer）9.05fps。
 ## MQTT/AIS 状态
 
 - paho-mqtt 已安装，MQTT 连接成功（地址由环境变量注入）
-- 订阅 upAIS/base_2250, upAIS/base_2251
+- 订阅 upAIS/#（通配符，base_2250/2251 已离线）
 - AIS 6-bit 解码器已实现（支持类型 1/2/3/4/18）
 - 测试期间 AIS 缓存为 0（区域内无船或无消息发布）
 - 真实 AIS 匹配待有船数据时验证

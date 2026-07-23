@@ -210,7 +210,8 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       hs.stream_a.last_frame_time_ms = ma.last_read_ms.load();
       hs.stream_a.rtsp_reconnects = ma.rtsp_reconnects.load();
       hs.stream_a.rtmp_reconnects = ma.rtmp_reconnects.load();
-      hs.stream_a.queue_length = 0;
+      hs.stream_a.queue_length = pipeline_a_.metrics().queue_length();
+      hs.stream_a.e2e_p95_ms = pipeline_a_.metrics().e2e_p95();
 
       // B 路快照
       hs.stream_b.stream_id = "B";
@@ -221,7 +222,8 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       hs.stream_b.last_frame_time_ms = mb.last_read_ms.load();
       hs.stream_b.rtsp_reconnects = mb.rtsp_reconnects.load();
       hs.stream_b.rtmp_reconnects = mb.rtmp_reconnects.load();
-      hs.stream_b.queue_length = 0;
+      hs.stream_b.queue_length = pipeline_b_.metrics().queue_length();
+      hs.stream_b.e2e_p95_ms = pipeline_b_.metrics().e2e_p95();
 
       hs.uptime_seconds = (now - start_ms_) / 1000;
       health_server_.update_state(hs);

@@ -42,7 +42,7 @@ C++ 视频热路径                         Python 业务 Sidecar
 ### 配置
 - Broker: 由环境变量 AIS_MQTT_HOST:AIS_MQTT_PORT 注入
 - Client ID: 由环境变量 AIS_MQTT_CLIENT_ID 注入
-- Topics: `upAIS/base_2250`, `upAIS/base_2251`
+- Topics: `upAIS/#`（通配符，base_2250/2251 已离线）
 
 ### AIS 解码
 - pyais 生产主路径 + 自研 6-bit 解码后备（pyais 2.4.0 已安装）

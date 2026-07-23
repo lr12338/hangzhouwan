@@ -171,7 +171,9 @@
 | 开始/结束时间 | 2026-07-22 19:59:07 / 20:02:11 |
 | 退出码 | 0 |
 | 关键指标 | A: out=10.0fps inf=5.0fps e2eP95=356ms RSS=26.1MB FD=203 threads=10 RTSP/RTMP重连=0；B: disconnected（摄像头400）；MQTT=connected AIS缓存=0；JSONL 2752事件全COORD_ONLY；systemd重启 business=1 video=0 |
-| 实际结果 | A 路全链路稳定运行 180s，无重连、无内存/FD/线程泄漏；B 路因摄像头 400 Bad Request 未连接（非代码问题）；灰度 RTMP 推流正常（_bm1684 后缀 Key，不覆盖 Windows 正式流） |
+| 实际结果 | A 路全链路稳定运行 180s，无重连、无内存/FD/线程泄漏；B 路因摄像头 400 Bad Request 未连接（非代码问题）；RTMP 推流正常 |
+
+> **后续更新（2026-07-23）**：推流地址已切换为正式地址（无 `_bm1684` 后缀），B 路 Channels/301 已恢复连接，双路推流正常。
 | 是否通过 | ✅ 通过 |
 | 日志位置 | `journalctl -u hangzhouwan-video.service`、`/var/lib/hangzhouwan/stream_A_events.jsonl` |
 | 遗留问题 | B 路摄像头返回 400 Bad Request（已知硬件问题，非代码问题）；AIS 缓存为 0（测试期间无船经过）；真实 AIS 人工样本待采集 |
@@ -191,4 +193,4 @@
 | 真实 AIS A/B 各 20 个人工样本 | ⏳ 待人工 | 需有船经过时采集 |
 | Windows 回切演练 | ⏳ 待人工 | 停止 systemd 服务后 Windows 可正常接管 |
 | systemd enable | ⏳ 待人工 | L4 + 回切演练通过后 |
-| 正式 RTMP 切换 | ⏳ 待人工 | 灰度对比 24h 后逐路切换 |
+| 正式 RTMP 切换 | ✅ 已完成 | 已切换为正式地址，双路推流正常 |

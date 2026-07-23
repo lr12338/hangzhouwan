@@ -57,11 +57,11 @@ hzwctl health
 | TPU 内存 | `bm-smi` 或 `cat /sys/kernel/debug/bm1684/memory_usage` | 无持续增长 |
 | FD | `ls /proc/$(pgrep dual_stream_app)/fd \| wc -l` | <100，无增长 |
 | 线程 | `ps -o nlwp $(pgrep dual_stream_app)` | 稳定 |
-| 磁盘 | `df -h /opt` | >500MB |
+| 磁盘 | `df -h / /opt` | 根分区 >1G，/opt >500MB |
 | 日志轮转 | `ls -la /var/log/hangzhouwan/` | 轮转生效 |
 | JSONL | `python3 -c "import json; [json.loads(l) for l in open('/var/lib/hangzhouwan/stream_A_events.jsonl')]"` | 全部合法 |
-| AIS 缓存 | `hzwctl health` | 有船时 >0 |
-| A/B fps | `hzwctl status` | A≥9fps, B≥5fps |
+| AIS 缓存 | `hzwctl health` | >0（upAIS/# 通配符订阅） |
+| A/B fps | `hzwctl status` | A≥9fps, B≥9fps（双路均 10fps 目标） |
 | RTSP 重连 | journalctl 日志 | 无频繁重连 |
 | RTMP 重连 | journalctl 日志 | 无频繁重连 |
 | business 降级 | JSONL enrichment_status | 偶发 DETECTION_ONLY 后恢复 |
@@ -133,7 +133,7 @@ echo "video NRestarts=$(systemctl show hangzhouwan-video.service -p NRestarts --
 echo "--- journal e2e ---"
 journalctl -u hangzhouwan-video.service --no-pager -n 5 2>&1 | grep 'P95' | tail -1
 echo "--- disk ---"
-df -h /opt | tail -1
+df -h / /opt | tail -2
 echo "--- JSONL count ---"
 wc -l /var/lib/hangzhouwan/stream_A_events.jsonl 2>/dev/null
 ```
@@ -147,7 +147,7 @@ wc -l /var/lib/hangzhouwan/stream_A_events.jsonl 2>/dev/null
 3. NRestarts 在 10 分钟内增长 >5（重启风暴）
 4. RSS 持续增长且不回落（内存泄漏）
 5. FD 数 >500 或持续增长
-6. 磁盘空间 <200MB
+6. 根分区磁盘空间 <500MB
 7. A 路 output_fps 持续 <5fps 超过 5 分钟
 8. RTSP/RTMP 重连频率 >2 次/小时
 9. TPU 内存持续增长

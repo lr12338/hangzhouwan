@@ -29,6 +29,12 @@ class SklearnCoordinatePredictor(CoordinatePredictor):
         t0 = time.time()
         self.rf_a = joblib.load(self.model_a_path)
         self.rf_b = joblib.load(self.model_b_path)
+        for m in (self.rf_a, self.rf_b):
+            if hasattr(m, "feature_names_in_"):
+                try:
+                    delattr(m, "feature_names_in_")
+                except AttributeError:
+                    pass
         self._load_time_ms = round((time.time() - t0) * 1000, 2)
         self._loaded = True
 

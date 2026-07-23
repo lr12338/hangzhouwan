@@ -80,9 +80,12 @@ class PyAisDecoder(AisDecoder):
     def decode(self, payload_str):
         if not self._available:
             return None
+        stripped = payload_str.strip()
+        # JSON 格式（如 dtu_shui_yu 主题）：直接解析预解码的 AIS 数据
+        if stripped.startswith("{"):
+            return self._decode_json(stripped)
         try:
             # pyais 2.4.0: decode() 返回单个消息对象（非可迭代）
-            stripped = payload_str.strip()
             ts_match = re.search(r"\*(\d{10})$", stripped)
             timestamp = None
             if ts_match:
@@ -137,6 +140,40 @@ class PyAisDecoder(AisDecoder):
             else:
                 return None
             return self._validate(result)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _decode_json(stripped):
+        """解析 JSON 格式的预解码 AIS 数据（如 dtu_shui_yu 主题）。
+
+        JSON 字段：mmsi, longitude, latitude, speed, course, heading, time
+        """
+        import json as _json
+        try:
+            d = _json.loads(stripped)
+            lon = d.get("longitude")
+            lat = d.get("latitude")
+            if lon is None or lat is None:
+                return None
+            lon = float(lon)
+            lat = float(lat)
+            if lon == 0 and lat == 0:
+                return None
+            if not (-180 <= lon <= 180) or not (-90 <= lat <= 90):
+                return None
+            return {
+                "msg_type": 1,
+                "mmsi": str(d.get("mmsi", "")),
+                "lon": lon,
+                "lat": lat,
+                "speed": float(d.get("speed", 0.0) or 0.0),
+                "course": float(d.get("course", 0.0) or 0.0),
+                "heading": int(d.get("heading", 511) or 511),
+                "decode_status": "ok",
+                "source_topic": "",
+                "timestamp": None,
+            }
         except Exception:
             return None
 

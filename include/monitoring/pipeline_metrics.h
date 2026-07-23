@@ -61,6 +61,11 @@ class PipelineMetrics {
   // 设置 jitter buffer 长度（供汇总展示）。
   void set_jitter_length(int len) { jitter_len_.store(len); }
 
+  // 健康接口用的 P95 采样（毫秒）。
+  double e2e_p95() const { std::lock_guard<std::mutex> lk(m_); return p95(e2e_ms_); }
+  double infer_p95() const { std::lock_guard<std::mutex> lk(m_); return p95(infer_ms_); }
+  int queue_length() const { return queue_len_.load(); }
+
   // 输出一次汇总日志（中文）。
   std::string summary() const;
 

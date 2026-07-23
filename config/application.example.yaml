@@ -52,7 +52,7 @@ ais:
   mqtt_client_id_env: AIS_MQTT_CLIENT_ID
   mqtt_username_env: AIS_MQTT_USERNAME
   mqtt_password_env: AIS_MQTT_PASSWORD
-  topics: []                      # ["upAIS/base_2250", ...]
+  topics: []                      # ["upAIS/#"] 通配符订阅（base_2250/2251 已离线）
   data_timeout_seconds: 30
   max_distance_km: 30
 
@@ -98,7 +98,7 @@ mqtt:
   client_id_env: AIS_MQTT_CLIENT_ID
   username_env: AIS_MQTT_USERNAME
   password_env: AIS_MQTT_PASSWORD
-  topics: ["upAIS/base_2250", "upAIS/base_2251"]
+  topics: ["upAIS/#"]  # 通配符订阅所有 AIS 基站（base_2250/2251 已离线）
   keepalive: 60
   reconnect_sec: 5
 
