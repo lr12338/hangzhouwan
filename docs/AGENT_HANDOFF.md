@@ -9,7 +9,7 @@
 平台：BM1684-SOC（chipid `0x1684`，非 BM1684X），libsophon 0.4.9，sophon-ffmpeg 0.8.0
 源码路径：`/home/linaro/hangzhouwan`（已从 `/home/linaro/hangzhouwan-orign/hangzhouwan` 迁移，旧路径保留兼容软链接）
 分支 HEAD：以 `git log -1 --oneline` 为准（`feat/bm1684-edge-deployment`）
-Python 测试：`python3 -m pytest tests/ -v`（仓库整理后 ONNX 测试从 skip 变为 pass，具体数量以实际运行为准）
+Python 测试：`python3 -m pytest tests/ -v` -> **99 passed, 0 skipped, 0 failed**（cleanup-46a151c 重跑；仓库整理后 ONNX 审计测试路径修复，由 skip 转 pass）
 
 ---
 

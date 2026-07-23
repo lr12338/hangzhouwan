@@ -8,12 +8,12 @@
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
-| HEAD | 以 `git log -1 --oneline` 为准（迁移前 `efe1d1a`，迁移后 `4e604fc`/`686cb20`+收尾修正） |
+| HEAD | `46a151c`（`feat/bm1684-edge-deployment`，cleanup Release 基线） |
 | 当前阶段 | **生产部署运行中**：正式双路推流已接管，Business/Video/AIS/MQTT 当前 HEALTHY |
 | 总体健康度 | 🟢 生产运行正常（HEALTHY），L4 长测/Windows回切/systemd enable/正式Release重建仍未完成 |
-| Python 测试 | `python3 -m pytest tests/ -v`（以实际运行为准） |
+| Python 测试 | `python3 -m pytest tests/ -v` -> **99 passed, 0 skipped, 0 failed**（cleanup-46a151c 重跑；ONNX 审计测试路径修复后由 skip 转 pass） |
 | 源码路径迁移 | 已从 `/home/linaro/hangzhouwan-orign/hangzhouwan` 迁移到 `/home/linaro/hangzhouwan`，旧路径保留兼容软链接 |
-| Release 状态 | `202607221953-3dfcf4e`，含热修补丁，manifest SHA256 校验失效，需重建 |
+| Release 状态 | current=`202607221953-3dfcf4e`（含热修补丁，manifest SHA256 失效）；cleanup=`cleanup-46a151c` 已重建（含全部热修、manifest 恢复），待激活审计 |
 
 ---
 
@@ -230,7 +230,7 @@
 
 ### Python 测试
 
-以 `python3 -m pytest tests/ -v` 实际输出为准（仓库整理后 ONNX 审计测试路径已修正，测试实际运行而非跳过）
+**99 passed, 0 skipped, 0 failed**（`python3 -m pytest tests/ -v` 实测，cleanup-46a151c 重跑）。口径说明：仓库整理后将 ONNX 审计测试路径由 `hangzhouwan_beishang/weights/best.onnx` 修正为 `weights/best.onnx`，原阶段7基线 3dfcf4e 的 skipped=2 转为 pass，当前 99 项全部执行通过。
 
 ### T1-T10 逐项结果
 
@@ -249,8 +249,9 @@
 
 ### Release 路径和版本
 
-- 当前 Release：`/opt/hangzhouwan/releases/202607221953-3dfcf4e`
-- previous：`/opt/hangzhouwan/releases/202607221948-3dfcf4e`
+- 当前 Release（current）：`/opt/hangzhouwan/releases/202607221953-3dfcf4e`（含热修补丁，运行中）
+- previous：`/opt/hangzhouwan/releases/202607221953-3dfcf4e`（**与 current 相同**，无独立回滚目标）
+- cleanup 候选：`/opt/hangzhouwan/releases/cleanup-46a151c`（未激活，含全部热修）
 
 ### systemd 实装状态
 
@@ -285,7 +286,14 @@
 - 真实 AIS A/B 各 20 个人工样本（待人工）
 - Windows 回切演练（待人工）
 - systemd enable（L4 + 回切演练通过后）
-- 重新构建正式 Release（纳入热修补丁，恢复 manifest SHA256 校验）
+- ~~重新构建正式 Release（纳入热修补丁，恢复 manifest SHA256 校验）~~ ✅ 已完成：`cleanup-46a151c` 含全部热修、manifest/SHA256 恢复（verify 8/8、sha256sum 34/34），待激活审计与维护窗口
+
+### cleanup Release 预检与激活口径（2026-07-23）
+
+- **预检**：`hzwctl preflight --release cleanup-46a151c --offline --activation` -> 30/30 通过；`verify_release.sh` 8/8 通过；`sha256sum -c` 34/34 通过。
+- **Phase 11 Smoke 未执行**：原因——无法在不争抢生产 TPU/RTSP/RTMP/MQTT/Socket 资源的前提下证明冒烟实例与现行生产服务互不冲突，本轮按只读审计原则跳过，留待维护窗口在受控重启后验证。
+- **构建依赖**：cleanup Release 构建依赖 Git 源码（`46a151c`）与固定 SHA256 的外部权重资产（`weights/0121_random_forest_model.pkl`、`weights/beishang_x-l.pkl`，gitignored；`artifacts/.../yolov7_ship_1684_f32.bmodel`，入库）。`build_release.sh` 缺资产时 fail-fast。
+- **上线顺序**：完整性异常审计 → 人工批准维护窗口 → 受控激活 cleanup → 5–10 分钟快速健康验证 → 回滚能力验证 → 必要时重新激活 cleanup → L4 24 小时长测 → Windows 回切演练 → systemd enable → 至少 7 天稳定观察。
 
 ### 正式推流已接管（2026-07-23 状态）
 

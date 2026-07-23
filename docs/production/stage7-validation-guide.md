@@ -13,6 +13,8 @@
 | 项目 | 结果 |
 |---|---|
 | Python 测试 | 93 项全部通过（skipped=2，best.onnx 被 gitignore） |
+
+> **更新（cleanup-46a151c）**：仓库整理后 ONNX 审计测试路径由 `hangzhouwan_beishang/weights/best.onnx` 修正为 `weights/best.onnx`，原 skipped=2 转为 pass；重跑 `python3 -m pytest tests/ -v` 为 **99 passed, 0 skipped, 0 failed**。上表 93/skipped=2 为 3dfcf4e 基线历史值。
 | C++ 编译 | 全部成功（dual_stream_app + single_video_infer + 所有测试目标） |
 | CTest | 13/13 通过（含 bmcv_processor 硬件测试、stability_script 30s） |
 | 动态库 | `ldd` 无 not found；RUNPATH 已嵌入 |

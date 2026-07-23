@@ -384,7 +384,22 @@ readlink -f /opt/hangzhouwan/current   # 应指向新 Release
 /opt/hangzhouwan/current/bin/hzwctl status
 ```
 
-> ⚠️ 升级时需重新构建含热修补丁的 Release（见第 18 节），否则会丢失 decoder.py、sklearn_predictor.py 修复和 e2e_p95 健康接口修复。
+> ⚠️ cleanup-46a151c 已是纳入全部热修补丁的正式重建 Release（见第 18 节）；旧 current `202607221953-3dfcf4e` 为就地热修、manifest SHA256 失效，激活 cleanup 后即替换，不会丢失 decoder.py、sklearn_predictor.py 修复和 e2e_p95 健康接口修复。
+
+### 受控激活与上线顺序（cleanup Release）
+
+cleanup Release 构建依赖 Git 源码（`46a151c`）与固定 SHA256 的外部权重资产（2 个 PKL + bmodel，见 `assets/README.md`）。上线须按以下顺序，严禁跳步：
+
+1. **完整性异常审计**：核实候选 Release 与现行生产二进制/热修一致性、外部权重可追溯。
+2. **人工批准维护窗口**：确认回滚目标可靠、维护时段、通知相关方。
+3. **受控激活 cleanup**：`sudo bash tools/release/activate_release.sh /opt/hangzhouwan/releases/cleanup-46a151c`（原子切换 + 自动回滚）。
+4. **5–10 分钟快速健康验证**：`hzwctl status` / health / 双路推流 / MQTT=AIS / Socket。
+5. **回滚能力验证**：确认 `previous` 指向激活前 current（热修版），可 `rollback_release.sh` 回退。
+6. **必要时重新激活 cleanup**：回滚演练后再次激活 cleanup 作为正式目标。
+7. **L4 24 小时长测**：按 `manual-long-run-guide.md`。
+8. **Windows 回切演练**：确认停止 systemd 后 Windows 旧服务可接管。
+9. **systemd enable**：`sudo systemctl enable hangzhouwan.target`（仅 L4 + 回切演练通过后）。
+10. **至少 7 天稳定观察**：监控健康度、重连、资源。
 
 ---
 
