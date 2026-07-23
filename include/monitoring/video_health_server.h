@@ -28,6 +28,7 @@ namespace hzw {
 // 单路流健康快照（由外部定期更新）
 struct StreamHealthSnapshot {
   std::string stream_id;
+  std::string level = "HEALTHY";  // 单路 HEALTHY|DEGRADED|FAILED
   bool rtsp_connected = false;
   bool rtmp_connected = false;
   double output_fps = 0.0;
@@ -46,7 +47,8 @@ struct VideoHealthState {
   std::string commit;
   std::string status = "UNKNOWN";       // HEALTHY | DEGRADED | FAILED
   std::string business_state = "UNKNOWN"; // FULL | COORD_ONLY | DETECTION_ONLY
-  std::string degradation = "none";     // none | detection_only | business_down
+  std::string degradation = "none";     // none | stream_degraded | stream_down | detection_only | resource_fatal
+  std::string health_reason;            // 降级/失败原因（人类可读）
   StreamHealthSnapshot stream_a;
   StreamHealthSnapshot stream_b;
   double rss_mb = 0.0;

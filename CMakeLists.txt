@@ -64,6 +64,7 @@ add_library(hzw_inf STATIC
   src/config/stream_profile.cpp
   src/config/application_config.cpp
   src/monitoring/pipeline_metrics.cpp
+  src/monitoring/video_health_logic.cpp
   src/monitoring/video_health_server.cpp
   src/pipeline/single_stream_pipeline.cpp
   src/application/dual_stream_application.cpp
@@ -155,6 +156,11 @@ add_test(NAME inflight_frame_tracker COMMAND test_inflight_frame_tracker)
 add_executable(test_rtmp_reconnect_decision tests/unit_cpp/test_rtmp_reconnect_decision.cpp)
 target_link_libraries(test_rtmp_reconnect_decision PRIVATE hzw_inf)
 add_test(NAME rtmp_reconnect_decision COMMAND test_rtmp_reconnect_decision)
+
+# 视频健康判定单元测试（纯逻辑，无需硬件）
+add_executable(test_video_health_logic tests/unit_cpp/test_video_health_logic.cpp)
+target_link_libraries(test_video_health_logic PRIVATE hzw_inf)
+add_test(NAME video_health_logic COMMAND test_video_health_logic)
 
 # 板端 forced-reconnect / VPU 显存泄漏复现工具（需 BM1684 硬件，不纳入 CTest 自动跑）
 add_executable(forced_reconnect_tool tools/dual_stream/forced_reconnect_tool.cpp)

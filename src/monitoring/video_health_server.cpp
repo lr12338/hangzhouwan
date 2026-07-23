@@ -34,6 +34,7 @@ std::string stream_to_json(const std::string& key, const StreamHealthSnapshot& s
   std::ostringstream oss;
   oss << "\"" << key << "\":{"
       << "\"stream_id\":\"" << escape_json(s.stream_id) << "\""
+      << ",\"level\":\"" << escape_json(s.level) << "\""
       << ",\"rtsp_connected\":" << (s.rtsp_connected ? "true" : "false")
       << ",\"rtmp_connected\":" << (s.rtmp_connected ? "true" : "false")
       << ",\"output_fps\":" << s.output_fps
@@ -198,6 +199,7 @@ std::string VideoHealthServer::build_health_json() {
   oss << ",\"commit\":\"" << escape_json(state_.commit) << "\"";
   oss << ",\"business_state\":\"" << escape_json(state_.business_state) << "\"";
   oss << ",\"degradation\":\"" << escape_json(state_.degradation) << "\"";
+  oss << ",\"health_reason\":\"" << escape_json(state_.health_reason) << "\"";
   oss << ",\"uptime_seconds\":" << state_.uptime_seconds;
   oss << ",\"rss_mb\":" << state_.rss_mb;
   oss << ",\"tpu_info\":\"" << escape_json(state_.tpu_info) << "\"";

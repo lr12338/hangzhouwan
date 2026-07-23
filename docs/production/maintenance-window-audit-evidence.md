@@ -39,6 +39,7 @@
 | 26 | 维护窗口时长用 30–60 秒估计 | Runbook 增加预计/最坏时长表（预计 ~30 min，最坏 ~70 min） | Runbook 维护窗口预计时长表 | ✅ |
 | 27 | 执行前快照非阻断 | Runbook §1.1 新增 5 项阻断项核验（current/previous/verify/manifest/systemd），失败不得继续 | Runbook §1.1 | ✅ |
 | 28 | 未评估停止范围 | Runbook §2.1 评估停止整个 target vs 仅停止 video，保留停止 target 并说明必要性 | Runbook §2.1 | ✅ |
+| 29 | 假健康：hzwctl 显示 `降级状态: none` 而 B 路已断；`resource_fatal` 未计入状态；字段名不匹配（last_frame_time/queue_length/e2e_p95_ms） | 新增纯逻辑 `video_health_logic`（资源致命/RTSP断/RTMP断/FPS0/重连风暴 -> DEGRADED/FAILED，A/B 隔离）；hzwctl 醒目展示 `状态`+`原因`+每路 `level`；修正字段名；`health` 退出码 0/1/2 | `test_video_health_logic.cpp` 11 项全过；CTest 16/16；hzwctl 语法/运行 OK | ✅ |
 
 ## 测试执行结果
 
@@ -49,12 +50,16 @@
 | `test_preflight.py` | ✅ 全部通过 | 预检和激活结构审计（含原有） |
 | `test_systemd_config.py` | ✅ 全部通过 | systemd 配置审计（含原有） |
 | `test_maintenance_window.sh` | ✅ 0 失败 | 生产守卫/软链接/manifest/RTMP/隔离 |
-| 全部 Python 测试 | ✅ 151 passed, 1 failed | 唯一失败为 `test_test_video_present_and_decodable`（VPU 硬件资源被生产占用，预存在） |
-| CTest | ✅ 14/15 passed | 唯一失败为 `stability_script`（VPU 硬件资源被生产占用，预存在） |
+| 全部 Python 测试 | ✅ 159 passed, 4 error | 4 error 为 `business_sidecar_client_test.py` 缺 `sock` fixture（预存在，非本轮引入） |
+| CTest | ✅ 16/16 passed | 含新增 `video_health_logic`；`stability_script` 在独立环境通过（生产占用时可能超时） |
 
 ## 候选 Release 是否变化
 
-**否。** 本轮仅修改以下文件，不涉及 `forced_reconnect_tool` 或任何 C++ 代码：
+**是，需重建。** 本轮修改了 C++ 代码（假健康修复，见问题 #29）：`video_health_logic.*`、
+`dual_stream_application.*`、`video_health_server.*`、`video_sink.h`、`hzwctl.py`、`test_video_health_logic.cpp`。
+因此候选 Release `vpu-reconnect-fix-1a1a7b2` **不再包含最新修复，不可直接激活**；
+需在新提交上重新执行 `build_release.sh` 生成新候选，并通过 G0–G7 全部门禁后方可激活。
+本轮修改的文件（不含此前脚本/测试/文档轮次）：
 
 - `tools/dual_stream/forced_reconnect_run.sh`（运行器）
 - `tools/dual_stream/evaluate_gates.py`（门禁评估器，新增）
@@ -65,7 +70,17 @@
 - `tests/unit/test_maintenance_window_gates.py`（测试，新增）
 - `tests/test_maintenance_window.sh`（测试，新增）
 
-候选 Release `vpu-reconnect-fix-1a1a7b2` 保持不变，无需重建。
+本轮（假健康修复）新增/修改：
+- `include/monitoring/video_health_logic.h` / `src/monitoring/video_health_logic.cpp`（健康判定，新增）
+- `src/application/dual_stream_application.cpp` / `include/application/dual_stream_application.h`（接入健康判定 + resource_fatal）
+- `src/monitoring/video_health_server.cpp` / `include/monitoring/video_health_server.h`（level/health_reason 字段）
+- `include/video/video_sink.h`（注释修正）
+- `tools/hzwctl.py`（状态展示 + 字段名修正）
+- `tests/unit_cpp/test_video_health_logic.cpp`（单测，新增）
+- `CMakeLists.txt`（注册新源与测试）
+- `docs/production/vpu-reconnect-fix.md` / `operations-guide.md` / `maintenance-window-runbook.md`（文档）
+
+候选 Release 需在新提交上重建并通过门禁后方可激活。
 
 ## 维护窗口预计/最大时长
 

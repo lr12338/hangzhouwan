@@ -31,6 +31,7 @@
 
 | # | 门禁 | 判定方法 | 通过标准 |
 |---|---|---|---|
+| G0 | 启动门禁 | Step 6.1 + `hzwctl status`/`version` | Business+Video active；双路 RTSP/RTMP connected；双路 output_fps≥5、inference_fps>0；MQTT/AIS 正常；`status=HEALTHY`；Release 与 commit 一致；无 VPU 分配错误；`previous` 指向有效回滚目标 |
 | G1 | RTSP 重连成功率 100% | Step 4 汇总 `gate_results` G1 | decoder ok=100 fail=0 **且** 真实 RTSP 断流验证通过（当前环境未实现 → G1 保持 NOT_PASSED） |
 | G2 | 最终 inflight=0 | 汇总 `gate_results` G2 | 各路末轮 inflight=0 |
 | G3 | VPU 资源无单调增长 | 汇总 `gate_results` G3 + `vpu_heap_analysis` | 所有堆各检查点 delta ≤ +10MB，无单调增长趋势 |

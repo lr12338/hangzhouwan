@@ -650,24 +650,33 @@ def cmd_status(args):
     # 优先从 Video 健康 Socket 读取
     vh = query_video_health("health")
     if vh.get("available", False) and "error" not in vh:
+        status = vh.get("status", "UNKNOWN")
+        # 状态头条：HEALTHY/DEGRADED/FAILED 醒目展示，避免"降级状态 none"假健康
+        marker = {"HEALTHY": "OK", "DEGRADED": "DEGRADED", "FAILED": "FAILED"}.get(status, "UNKNOWN")
         print("  (数据来源: Video 健康 Socket)")
+        print(f"  状态:          [{marker}] {status}")
+        reason = vh.get("health_reason", "")
+        if reason:
+            print(f"  原因:          {reason}")
         print(f"  release:       {vh.get('release', '?')}")
         print(f"  commit:        {vh.get('commit', '?')}")
         for sid in ("A", "B"):
             s = vh.get("streams", {}).get(sid, {})
             if s:
-                print(f"  流 {sid}:")
+                lvl = s.get("level", "UNKNOWN")
+                print(f"  流 {sid}:          [{lvl}]")
                 print(f"    RTSP:         {'connected' if s.get('rtsp_connected') else 'disconnected'}")
                 print(f"    RTMP:         {'connected' if s.get('rtmp_connected') else 'disconnected'}")
                 print(f"    output_fps:   {s.get('output_fps', '?')}")
                 print(f"    inference_fps:{s.get('inference_fps', '?')}")
                 print(f"    RTSP重连:     {s.get('rtsp_reconnects', '?')}")
                 print(f"    RTMP重连:     {s.get('rtmp_reconnects', '?')}")
-                print(f"    最近帧:       {s.get('last_frame_time', '?')}")
-        print(f"  队列长度:      {vh.get('queue_length', '?')}")
-        print(f"  e2e P95:       {vh.get('e2e_p95_ms', '?')}ms")
+                print(f"    最近帧(ms):   {s.get('last_frame_time_ms', '?')}")
+                print(f"    队列长度:     {s.get('queue_length', '?')}")
+                print(f"    e2e P95:      {s.get('e2e_p95_ms', '?')}ms")
         print(f"  Business:      {vh.get('business_state', '?')}")
         print(f"  降级状态:      {vh.get('degradation', 'none')}")
+        print(f"  uptime:        {vh.get('uptime_seconds', '?')}s")
         print(f"  RSS:           {vh.get('rss_mb', '?')}MB")
         print(f"  TPU:           {vh.get('tpu_info', '?')}")
     else:
@@ -690,9 +699,10 @@ def cmd_health(args):
     """健康状态（优先读 Video 健康接口，回退 Sidecar）。"""
     vh = query_video_health("health")
     if vh.get("available", False) and "error" not in vh:
+        status = vh.get("status", "UNKNOWN")
         print("=== Video 健康（Socket）===")
         print(json.dumps(vh, ensure_ascii=False, indent=2))
-        return 0 if vh.get("status") != "FAILED" else 1
+        return {"HEALTHY": 0, "DEGRADED": 1, "FAILED": 2}.get(status, 2)
 
     print("=== Business Sidecar 健康 ===")
     health = query_sidecar_health(BUSINESS_SOCK)

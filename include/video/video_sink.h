@@ -7,7 +7,8 @@
 // extradata 或 MP4 封装失败，自动回退到 TS/裸 H.264。禁止使用 libx264。
 //
 // 阶段4.3：增加 RTMP 网络输出（FLV muxer + RTMP 协议）与重连状态机。
-// RTMP 重连仅重建编码器与 FLV muxer，不重新加载 bmodel，不重新连接 RTSP。
+// RTMP 重连仅重建 FLV muxer + RTMP AVIO，保留硬件编码器（避免 VPU 显存 churn），
+// 不重新加载 bmodel，不重新连接 RTSP；编码器 ENOMEM 才升级 DEVICE_RESOURCE_FATAL。
 // =============================================================================
 #ifndef HZW_VIDEO_VIDEO_SINK_H
 #define HZW_VIDEO_VIDEO_SINK_H
@@ -107,8 +108,8 @@ class SophonVideoSink {
   void teardown_muxer();
   // 释放 muxer 与编码器（用于 close / 资源致命）。
   void teardown_muxer_encoder();
-  // RTMP 重连：退避 -> 重建编码器 -> 重建 FLV muxer -> 重开 RTMP -> 重写 header。
-  // 成功后重置 PTS。返回 false 表示停止或不可恢复。
+  // RTMP 重连：退避 -> 仅重建 FLV muxer + RTMP AVIO（保留 enc_ 硬件编码器）-> 重写 header。
+  // 成功后重置 PTS（新会话从 0 开始，避免 non-monotonous DTS）。返回 false 表示停止或不可恢复。
   bool reconnect_rtmp(std::string& err);
   // 可被停止中断的睡眠。
   void sleep_interruptible(int64_t ms);

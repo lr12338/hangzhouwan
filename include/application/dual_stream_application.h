@@ -64,6 +64,9 @@ class DualStreamApplication {
   int64_t prev_output_b_ = 0;
   int64_t prev_infer_b_ = 0;
   int64_t prev_sample_ms_ = 0;
+  // 上次采样时的重连累计值，用于计算单窗口重连增量（重连风暴检测）
+  int64_t prev_reconnect_a_ = 0;
+  int64_t prev_reconnect_b_ = 0;
 };
 
 }  // namespace hzw

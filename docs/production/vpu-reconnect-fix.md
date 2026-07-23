@@ -1,6 +1,6 @@
 # BM1684 视频重连 VPU 显存耗尽：根因与修复
 
-> 状态：修复已合入 `feat/bm1684-edge-deployment`（提交 `1a1a7b2`），已构建候选 Release
+> 状态：根因经代码审查复核确认（见 §1、§2），候选修复 `1a1a7b2` 覆盖根因；本轮补充假健康修复（见 §2.1）。候选
 > `vpu-reconnect-fix-1a1a7b2`。**该 Release 为“维护窗口验证候选”，尚未获维护窗口批准，不可上线。**
 > **本轮未激活、未重启、未切换生产。** 生产仍运行旧二进制（`current -> 202607221953-3dfcf4e`），
 > VPU heap2 接近耗尽，仍存在重连稳定性风险。`cleanup-46a151c` 不再作为上线候选。
@@ -41,6 +41,28 @@
 **RTSP 重连状态机**：`read()` 断流 -> 返回 `RTSP_RECONNECT` -> `coordinate_rtsp_reconnect`：`rtsp_draining_=true` -> `drain_jitter` + `q_decode.drain` + `q_encode.drain` -> `source.wait_avframes_drained(timeout)` -> (归零) `source.reconnect_rtsp()`(关闭旧解码器[受 inflight==0 保护]->重开输入->重开解码器, epoch+1) -> `rtsp_draining_=false` -> 续读。未归零=>`DEVICE_RESOURCE_FATAL`(70)=>停双路=>非零退出=>systemd 重启=>VPU 堆恢复。
 
 **RTMP 重连状态机**：写失败/断开 -> `decide_rtmp_reconnect` -> 普通网络错误=`REBUILD_MUXER_ONLY`(`teardown_muxer` 保留 enc_ -> 重开 RTMP AVIO -> 重写 header -> PTS reset)；编码器 ENOMEM/未打开=`ESCALATE_FATAL`(70)。
+
+## 2.1 假健康修复（本轮补充）
+
+**问题**：生产 B 路故障时，hzwctl 仍显示 `降级状态: none`，形成假健康--因为 `degradation`
+仅反映业务降级（none/detection_only/business_down），不反映单路断流；且 hzwctl 从未展示
+整体 `status`（HEALTHY/DEGRADED/FAILED），`resource_fatal`（VPU 致命）也未计入状态。
+另外 hzwctl 读取字段名与接口不匹配：`last_frame_time`（实际为 `last_frame_time_ms`）、
+顶层 `queue_length`/`e2e_p95_ms`（实际为每路字段），导致"最近帧/队列/P95"恒显示 `?`。
+
+**修复**（对应运维门禁 6.5）：
+
+| 文件 | 关键改动 |
+|---|---|
+| `include/monitoring/video_health_logic.h` / `src/monitoring/video_health_logic.cpp` | 新增：纯逻辑健康判定 `compute_stream_level`/`compute_dual_health`，可独立单测。规则：资源致命->FAILED；RTSP断开->FAILED；output_fps<阈值/RTMP断开/inference=0/重连风暴->DEGRADED；A/B 独立计算（B 路不拖累 A 路） |
+| `src/application/dual_stream_application.cpp` / `include/application/dual_stream_application.h` | 用 `compute_dual_health` 取代内联判定；新增 `resource_fatal` 计入状态、重连增量（风暴检测）、单路 level；`degradation` 扩展为 none/stream_degraded/stream_down/detection_only/resource_fatal |
+| `include/monitoring/video_health_server.h` / `src/monitoring/video_health_server.cpp` | 健康接口新增 `health_reason`（降级原因）与每路 `level`（HEALTHY/DEGRADED/FAILED）字段 |
+| `tools/hzwctl.py` | `status` 醒目展示 `状态: [HEALTHY/DEGRADED/FAILED]` 与 `原因`；每路显示 `[LEVEL]`；修正 `last_frame_time_ms`/每路 `queue_length`/`e2e_p95_ms` 字段名；`health` 退出码 0=HEALTHY/1=DEGRADED/2=FAILED |
+| `include/video/video_sink.h` | 修正过时注释：RTMP 重连保留编码器（非重建） |
+| `tests/unit_cpp/test_video_health_logic.cpp` | 新增：11 项纯逻辑单测（资源致命/RTSP断开/双路断/FPS低/RTMP断/inference0/重连风暴/全健康/业务降级/A-B隔离/致命优先） |
+
+**效果**：B 路断流时 hzwctl 显示 `状态: [DEGRADED] 原因: B路不可用 降级状态: stream_down`，
+不再假健康；VPU 致命时显示 `状态: [FAILED] 原因: 设备资源致命(VPU/gmem)`。
 
 ## 3. 测试结果
 

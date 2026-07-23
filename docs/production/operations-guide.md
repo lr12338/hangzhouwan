@@ -154,6 +154,27 @@ sudo systemctl restart hangzhouwan-business.service
 - **只重启 Video**：Business 继续运行，Video 恢复后自动重连 Business Socket。
 - **只重启 Business**：Video 继续推流（降级为 DETECTION_ONLY），Business 恢复后 Video 自动恢复融合。
 
+### 6.1 故障恢复分级（先只读排查，保存证据后再恢复）
+
+> 未经现场授权，不得激活候选 Release、修改生产配置、回滚、整机重启、停止 Business、故障注入、连续反复重启 Video、删除 Release/日志/证据。
+
+| 优先级 | 操作 | 适用场景 | 边界 |
+|---|---|---|---|
+| 1 | 保存日志 + VPU Heap 快照 | 任何故障第一时间 | 只读，安全；`bm-smi -noloop` + journalctl 存盘（见 8.1） |
+| 2 | Video-only 重启一次 | 单路/双路推流中断、VPU 分配失败但 heap 未耗尽 | `sudo systemctl restart hangzhouwan-video.service`；Business 不受影响 |
+| 3 | 停止反复重启 | Video-only 重启后快速复发（<10min 再现 B 路故障） | 连续重启会加剧 VPU 碎片化；改用单路降级或整机重启 |
+| 4 | 单路降级 | B 路持续故障、A 路正常 | 配置 `run_b: false` 仅保留 A 路（或反之），避免故障路拖累整机 |
+| 5 | 受控整机重启 | VPU heap 耗尽、双路均不可用、资源致命反复 | `sudo reboot`；重启后 heap 由内核全部回收；验证 G0 启动门禁 |
+
+### 6.2 单路降级策略
+
+当单路（如 B）RTSP 持续不可恢复时，可临时降级为单路运行，保证 A 路推流不中断：
+
+- 修复版 A/B 隔离：B 路资源致命/断流不会破坏 A 路已建立的 decoder（独立 epoch/队列/线程）。
+- 降级操作：编辑 `/etc/hangzhouwan/application.yaml`，将故障路 `run: false`，重启 Video。
+- 恢复：故障路网络恢复后改回 `run: true` 重启；hzwctl `状态` 应恢复 HEALTHY。
+- 健康可见性：hzwctl `状态: DEGRADED`、`降级状态: stream_down`、`原因: B路不可用` 会明确标识，不再出现"降级状态 none"假健康。
+
 ---
 
 ## 7. 查看系统状态
@@ -178,7 +199,23 @@ sudo systemctl restart hangzhouwan-business.service
 `status` 输出字段说明：
 - **当前 Release**：版本号和路径
 - **Business 服务**：active/inactive/failed + coordinate_mode + MQTT 状态 + AIS 缓存
-- **Video 服务**：active/inactive/failed + A/B RTSP/RTMP 状态 + output/inference fps + 重连次数 + Business 降级状态 + RSS
+- **Video 服务**：active/inactive/failed + 整体状态 + 各路状态 + A/B RTSP/RTMP 状态 + output/inference fps + 重连次数 + 最近帧 + 队列长度 + e2e P95 + 降级状态 + uptime + RSS + TPU
+
+整体状态（`状态`，最重要，醒目展示，避免"降级状态 none"假健康）：
+
+| status | 含义 | 触发条件 |
+|---|---|---|
+| `HEALTHY` | 双路正常 | A/B 均 RTSP+RTMP 连接、output_fps≥5、inference_fps>0、无资源致命、无重连风暴 |
+| `DEGRADED` | 至少一路降级或业务降级 | 单路 RTSP/RTMP 断开、output/inference fps 归零、重连风暴(单窗口>3)、业务仅检测 |
+| `FAILED` | 不可用 | 任一路资源致命(VPU/gmem ENOMEM)、或 A/B 双路均不可用 |
+
+单路状态（`流 A/B: [LEVEL]`）：`HEALTHY` / `DEGRADED` / `FAILED`，判定与整体一致但按单路独立计算（B 路故障不拖累 A 路判定）。
+
+`原因`（health_reason）：降级/失败的人类可读原因（如"B路不可用"、"设备资源致命(VPU/gmem)"），便于直接定位。
+
+`降级状态`（degradation）：`none` / `stream_degraded` / `stream_down` / `detection_only` / `resource_fatal`，标识降级类别。
+
+`health` 命令退出码：`0`=HEALTHY、`1`=DEGRADED、`2`=FAILED（可用于监控告警，DEGRADED 即告警）。
 
 ---
 
@@ -226,6 +263,73 @@ journalctl -u hangzhouwan-video.service --since today --no-pager \
 journalctl -u hangzhouwan-business.service --since today --no-pager \
   | grep -E 'MQTT|AIS|模型|错误|失败'
 ```
+
+### 8.1 日志查询规模限制（生产排障必须遵守）
+
+生产日志可能含大量重复字符和错误风暴。**禁止**直接执行 `journalctl --no-pager`、`dmesg`、`cat 超大日志`。每次查询默认满足：
+
+- 时间窗口 ≤ 5～10 分钟；原始输出 ≤ 200 行；展示关键日志 ≤ 80 行；单次文本 ≤ 30 KB。
+- **先统计，再提取首次/末次/代表样本**；输出仍过大则立即缩小时间范围或关键词，不得完整打印。
+
+按时间窗口（先统计错误类型，再取样本）：
+
+```bash
+# 1) 统计错误类型与次数
+video_pid=$(systemctl show hangzhouwan-video.service -p MainPID --value)
+journalctl -u hangzhouwan-video.service "_PID=${video_pid}" \
+  --since "-10 min" --no-pager -o cat \
+  | grep -Eo 'bm_alloc_gmem failed|AllocateDecFrameBuffer|BMVidDecSeqInitW5 failed|invalid free|VPU_DecOpen failed|DEVICE_RESOURCE_FATAL|RTSP_RECONNECT|RTMP重连' \
+  | sort | uniq -c | sort -rn
+
+# 2) 围绕故障时间取代表样本（≤200 行）
+journalctl -u hangzhouwan-video.service \
+  --since "2026-07-23 17:32:30" --until "2026-07-23 17:34:30" \
+  --no-pager -o short-iso -n 200
+
+# 3) 限定当前 PID
+journalctl -u hangzhouwan-video.service "_PID=${video_pid}" \
+  --since "-10 min" --no-pager -o short-iso -n 200
+```
+
+保存完整日志但只展示摘要（避免占满上下文）：
+
+```bash
+# 存盘完整快照（供事后审计）
+journalctl -u hangzhouwan-video.service --since "-30 min" --no-pager -o short-iso \
+  > /tmp/video-$(date +%Y%m%d%H%M).log
+# 仅回显统计与首/末样本
+wc -l /tmp/video-*.log
+head -5 /tmp/video-*.log; echo '...'; tail -5 /tmp/video-*.log
+```
+
+### 8.2 VPU Heap 查询与趋势记录
+
+```bash
+# VPU 设备内存（heap0=DDR、heap2=VPU 2048MB）。重连泄漏主要看 heap2 used 是否随轮次单调增长
+bm-smi -noloop
+
+# 趋势记录（重连前后各采样一次，对比 used 增量）
+echo "before: $(bm-smi -noloop | grep -A2 'memory' | tail -1)"
+# ... 触发重连 ...
+echo "after:  $(bm-smi -noloop | grep -A2 'memory' | tail -1)"
+```
+
+判定：正常重连 heap2 used **持平或下降**；每轮 +39.5MB 单调增长即为 bm_image 池孤儿化泄漏。
+
+### 8.3 常见错误与判定表
+
+| 关键词 | 含义 | 判定 | 处置 |
+|---|---|---|---|
+| `bm_alloc_gmem failed` | VPU 设备内存分配失败 | heap 耗尽/碎片化 | 查 bm-smi heap2；若持续，Video-only 重启；复发则停止反复重启，申请受控整机重启 |
+| `AllocateDecFrameBuffer fail` | 解码器帧缓冲分配失败 | heap 不足，新解码器无法开池 | 同上；确认旧解码器已释放 |
+| `BMVidDecSeqInitW5 failed 0xffffffff` | 解码序列初始化失败 | heap 耗尽或残留解码器占用 | 重启进程回收；检查 inflight 是否归零 |
+| `VPU_DecOpen failed 0x11` | 解码器打开失败(ENOMEM) | VPU 堆接近耗尽 | 进程退出由内核回收 heap；确认 StartLimit 未触发 |
+| `free gmem addr 0xfffffffff is invalide` | 无效地址释放 | 释放了 Codec 内部地址（旧 bug） | 已由"仅 av_frame_unref 回收"修复；若再现需排查是否绕过 release() |
+| `DEVICE_RESOURCE_FATAL` | 资源致命熔断 | ENOMEM 升级，退出码 70 | systemd 自动重启；确认 heap 恢复后再观察 |
+| `RTSP_RECONNECT` | RTSP 断流交管线协调 | 正常重连流程 | 等待重连成功；若重连计数异常增长查网络 |
+| `RTMP重连 ... 仅重建muxer` | RTMP 网络重连 | 编码器保留，无 VPU churn | 正常；若编码器重建则查是否 ENOMEM |
+| `在途帧未归零` | 重连前 inflight 未排空 | 处理/编码线程持帧超时 | 检查 RTMP 是否阻塞 write；超时退出 70 由 systemd 恢复 |
+| `降级状态: stream_down` / hzwctl `状态: DEGRADED` | 单路不可用 | B 路 RTSP 断开等 | 按单路降级策略处置，A 路不受影响 |
 
 ---
 
