@@ -5,7 +5,7 @@
 | 项 | 内容 |
 |---|---|
 | 盘点日期 | 2026-07-20 |
-| 仓库根 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
+| 仓库根 | `/home/linaro/hangzhouwan` |
 | 远程 | `https://github.com/lr12338/hangzhouwan.git` |
 | 分支 | `feat/bm1684-edge-deployment`（由 `main` 创建） |
 | `main` HEAD | `56d380f3f25a49dfaa012946dd11d2c3a0fe7bef` |

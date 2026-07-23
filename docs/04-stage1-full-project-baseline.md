@@ -16,7 +16,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 仓库根 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
+| 仓库根 | `/home/linaro/hangzhouwan` |
 | 远程 | `https://github.com/lr12338/hangzhouwan.git`（与目标一致） |
 | 默认分支 | `main`（HEAD `56d380f3f25a49dfaa012946dd11d2c3a0fe7bef`） |
 | 当前分支 | `feat/bm1684-edge-deployment`（由 `main` 创建，工作区原为干净） |
@@ -153,7 +153,7 @@
 ## 15. 回滚方法
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 # 回到阶段1起点（main）：
 git switch main
 # 或仅撤销阶段1三个提交但保留改动在工作区：

@@ -70,6 +70,7 @@ hangzhouwan.target
 | `/run/hangzhouwan/video-health.sock` | Video 结构化健康接口 Socket |
 | `/var/log/hangzhouwan/` | 日志和诊断包目录 |
 | `/var/lib/hangzhouwan/` | JSONL 事件输出和状态数据目录 |
+| `/home/linaro/hangzhouwan` | 源码仓库（Git 分支 `feat/bm1684-edge-deployment`） |
 
 Release 目录结构：
 ```

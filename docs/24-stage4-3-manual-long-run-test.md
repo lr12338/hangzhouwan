@@ -8,7 +8,7 @@ A、B 两路单路 300 秒短测均已通过。本指南提供 30 分钟和 2 �
 
 ```bash
 export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 ```
 
 ## A路 30 分钟测试

@@ -6,7 +6,7 @@
 |---|---|
 | 最后更新 | 2026-07-22（阶段7收口：systemd/hzwctl/release修复、Video健康接口、配置一致性、91项Python测试全通过） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
-| 本地路径 | `/home/linaro/hangzhouwan-orign/hangzhouwan` |
+| 本地路径 | `/home/linaro/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
 | HEAD | `a9a10dc`（工作区有本次修改未提交） |
 | 当前阶段（阶段7收口） | **代码完成、实装待验证**：systemd配置修复、hzwctl preflight重写、release激活+自动回滚、Video健康Socket、配置一致性、PROGRESS修正 |

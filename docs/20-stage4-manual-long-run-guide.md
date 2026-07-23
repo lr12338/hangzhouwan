@@ -7,14 +7,14 @@
 
 ## 前置条件
 
-1. 板端路径：`/home/linaro/hangzhouwan-orign/hangzhouwan`
+1. 板端路径：`/home/linaro/hangzhouwan`
 2. 分支：`feat/bm1684-edge-deployment`
 3. 已编译：`build/single_video_infer` 存在
 4. 测试视频：`testdata/test.mp4`（16.7MB，960×544，20fps，~10s）
 5. bmodel：`artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel`
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 
 # 确认编译最新
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -30,7 +30,7 @@ cd build && ctest --output-on-failure && cd ..
 ### 1.1 启动
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 
 ./tools/video_inference/stability_test.sh 30
 ```
@@ -65,7 +65,7 @@ cd /home/linaro/hangzhouwan-orign/hangzhouwan
 测试运行中（另开终端）：
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 
 # 实时查看日志
 tail -f artifacts/stage4/logs/medium_30min.log
@@ -103,7 +103,7 @@ pgrep -x single_video_infer || echo "无残留"
 ### 2.1 启动
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 
 ./tools/video_inference/stability_test.sh 120
 ```
@@ -128,7 +128,7 @@ cd /home/linaro/hangzhouwan-orign/hangzhouwan
 测试运行中：
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 
 # 实时查看日志
 tail -f artifacts/stage4/logs/full_2hour.log

@@ -64,7 +64,7 @@
 ## 4. 快速开始
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 git switch feat/bm1684-edge-deployment
 
 # 运行离线测试（26 项，纯标准库，无需 pip install）

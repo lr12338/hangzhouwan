@@ -12,7 +12,7 @@
 ## 0. 构建与基线（每次测试前）
 
 ```bash
-cd /home/linaro/hangzhouwan-orign/hangzhouwan
+cd /home/linaro/hangzhouwan
 export LD_LIBRARY_PATH=/opt/sophon/sophon-ffmpeg_0.8.0/lib:/opt/sophon/libsophon-0.4.9/lib
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

@@ -2,7 +2,7 @@
 
 ## 当前状态：2026-07-23 生产部署运行中
 
-项目根目录：`/home/linaro/hangzhouwan-orign/hangzhouwan`
+项目根目录：`/home/linaro/hangzhouwan`
 仓库：`https://github.com/lr12338/hangzhouwan`
 分支：`feat/bm1684-edge-deployment`
 当前 Release：`202607221953-3dfcf4e`（`/opt/hangzhouwan/current`，含热修补丁）
