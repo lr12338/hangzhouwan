@@ -87,25 +87,88 @@ journalctl -u hangzhouwan-video -n 50 --no-pager
 
 ## 7. 回滚步骤
 
-如果迁移后出现问题，按以下步骤回滚：
+如果迁移后出现问题，按以下逐项恢复方案回滚。每一步在执行前检查目标是否已存在，
+如遇冲突立即停止，不要强制覆盖。
+
+隔离目录时间戳：`20260723-101304`
+
+### 步骤 1：删除兼容软链接（仅当目标是软链接时）
 
 ```bash
-# 1. 删除兼容软链接
-rm /home/linaro/hangzhouwan-orign/hangzhouwan
+if [ -L /home/linaro/hangzhouwan-orign/hangzhouwan ]; then
+  rm /home/linaro/hangzhouwan-orign/hangzhouwan
+  echo "已删除软链接"
+else
+  echo "目标不是软链接，停止回滚" >&2
+  exit 1
+fi
+```
 
-# 2. 从隔离目录恢复旧源码目录
-TS=<隔离目录时间戳>
-mv /home/linaro/hangzhouwan_migration_backup/$TS/hangzhouwan \
-   /home/linaro/hangzhouwan-orign/hangzhouwan
+### 步骤 2：恢复旧源码目录（冲突即停止）
 
-# 3. 恢复历史目录（如需要）
-mv /home/linaro/hangzhouwan_migration_backup/$TS/home_linaro/* /home/linaro/
+```bash
+QDIR=/home/linaro/hangzhouwan_migration_backup/20260723-101304
+TARGET=/home/linaro/hangzhouwan-orign/hangzhouwan
 
-# 4. 验证旧路径恢复正常
+if [ -e "$TARGET" ]; then
+  echo "目标已存在，停止回滚：$TARGET" >&2
+  exit 1
+fi
+if [ ! -d "$QDIR/hangzhouwan" ]; then
+  echo "隔离目录中无源码，停止回滚" >&2
+  exit 1
+fi
+mv "$QDIR/hangzhouwan" "$TARGET"
+echo "已恢复源码目录到 $TARGET"
+```
+
+### 步骤 3：恢复旧 .git（冲突即停止）
+
+```bash
+if [ -e /home/linaro/hangzhouwan-orign/.git ]; then
+  echo "目标已存在，跳过"
+else
+  mv "$QDIR/hangzhouwan-orign_dotgit" /home/linaro/hangzhouwan-orign/.git
+  echo "已恢复 .git"
+fi
+```
+
+### 步骤 4：恢复旧 artifacts（冲突即停止）
+
+```bash
+if [ -e /home/linaro/hangzhouwan-orign/artifacts ]; then
+  echo "目标已存在，跳过"
+else
+  mv "$QDIR/hangzhouwan-orign_artifacts" /home/linaro/hangzhouwan-orign/artifacts
+  echo "已恢复 artifacts"
+fi
+```
+
+### 步骤 5：恢复历史文件（逐项检查，冲突即跳过）
+
+```bash
+for item in hangzhouwan-main hangzhouwan_src hangzhouwan_conversation_export \
+            hangzhouwan_migration_audit hz.tar.gz hz_full.tar.gz \
+            fetch_repo.py fetch2.py hz_dl.log "udo ss -lntup"; do
+  if [ -e "/home/linaro/$item" ]; then
+    echo "跳过（已存在）：/home/linaro/$item"
+  elif [ -e "$QDIR/home_linaro/$item" ]; then
+    mv "$QDIR/home_linaro/$item" "/home/linaro/$item"
+    echo "已恢复：/home/linaro/$item"
+  else
+    echo "隔离目录中不存在：$item"
+  fi
+done
+```
+
+### 步骤 6：验证
+
+```bash
 cd /home/linaro/hangzhouwan-orign/hangzhouwan
 git status --short --branch
+git log -1 --oneline
 
-# 5. 生产服务无需重启（服务运行在 /opt/hangzhouwan/current，与源码路径无关）
+# 生产服务无需重启（服务运行在 /opt/hangzhouwan/current，与源码路径无关）
 systemctl is-active hangzhouwan-business
 systemctl is-active hangzhouwan-video
 ```
@@ -160,5 +223,11 @@ systemctl is-active hangzhouwan-video
 - 新仓库 remote：`git@github.com:lr12338/hangzhouwan.git`
 - 生产服务状态：迁移前后均为 active，无需重启
 - 生产运行路径：未切换（服务始终运行在 `/opt/hangzhouwan/current`）
-- 迁移提交：`4e604fc`（chore: 整理项目目录并统一生产运维路径）
-- 迁移后验证：87 项 Python 单元测试通过，preflight 42 项通过，生产服务 HEALTHY
+- 迁移提交 1：`4e604fc`（chore: 整理项目目录并统一生产运维路径）
+- 迁移提交 2：`686cb20`（docs: 补充迁移提交哈希和验证结果）
+- 收尾修正提交：见最终分支 HEAD（本次 .gitignore 修正 + 文档一致性更新）
+- 最终分支 HEAD：`feat/bm1684-edge-deployment`（以 `git log -1 --oneline` 为准）
+- 迁移后验证：Python 测试 93 collected / 91 passed / 2 skipped，preflight 42 项通过，生产服务 HEALTHY
+- 测试命令：`python3 -m pytest tests/ -v`（93 collected, 91 passed, 2 skipped）
+- 磁盘：根分区 5.8G 已用 73%（4.1G/5.8G），inode 19%（73236/393216）
+- 新仓库大小：209M（含 .git 49M），隔离目录大小：467M

@@ -7,6 +7,9 @@
 分支：`feat/bm1684-edge-deployment`
 当前 Release：`202607221953-3dfcf4e`（`/opt/hangzhouwan/current`，含热修补丁）
 平台：BM1684-SOC（chipid `0x1684`，非 BM1684X），libsophon 0.4.9，sophon-ffmpeg 0.8.0
+源码路径：`/home/linaro/hangzhouwan`（已从 `/home/linaro/hangzhouwan-orign/hangzhouwan` 迁移，旧路径保留兼容软链接）
+分支 HEAD：以 `git log -1 --oneline` 为准（`feat/bm1684-edge-deployment`）
+Python 测试：`python3 -m pytest tests/ -v`：93 collected，91 passed，2 skipped
 
 ---
 
@@ -74,7 +77,7 @@
 - **B 路 400 Bad Request**：`Channels/301` 摄像头端固件问题，重启 Video 可恢复；替代通道 `101/201/401/501/701/801` 可用
 - **AIS 匹配需有船经过**：匹配半径 500m，当前视野内无 AIS 船舶时 `ais_matched: false` 属正常
 - **kern.log 刷屏**：VPU clock 日志，已通过 journald 限制 + rsyslog 轮转控制
-- **根分区 5.8G**：已优化至 71%，需定期检查 `kern.log` 膨胀
+- **根分区 5.8G**：已用 73%（4.1G/5.8G），inode 19%（73236/393216），需定期检查 `kern.log` 膨胀
 
 ## 禁止事项
 

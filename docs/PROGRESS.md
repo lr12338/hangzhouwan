@@ -4,13 +4,16 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-22（阶段7收口：systemd/hzwctl/release修复、Video健康接口、配置一致性、91项Python测试全通过） |
+| 最后更新 | 2026-07-23（生产目录治理与无损迁移完成、收尾修正） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 本地路径 | `/home/linaro/hangzhouwan` |
 | 当前分支 | `feat/bm1684-edge-deployment` |
-| HEAD | `a9a10dc`（工作区有本次修改未提交） |
-| 当前阶段（阶段7收口） | **代码完成、实装待验证**：systemd配置修复、hzwctl preflight重写、release激活+自动回滚、Video健康Socket、配置一致性、PROGRESS修正 |
-| 总体健康度 | 🟡 阶段7代码完成，T1-T10短测+L1-L4长测待人工在BM1684真实环境执行；不自动enable生产systemd、不关闭Windows |
+| HEAD | 以 `git log -1 --oneline` 为准（迁移前 `efe1d1a`，迁移后 `4e604fc`/`686cb20`+收尾修正） |
+| 当前阶段 | **生产部署运行中**：正式双路推流已接管，Business/Video/AIS/MQTT 当前 HEALTHY |
+| 总体健康度 | 🟢 生产运行正常（HEALTHY），L4 长测/Windows回切/systemd enable/正式Release重建仍未完成 |
+| Python 测试 | `python3 -m pytest tests/ -v`：93 collected，91 passed，2 skipped |
+| 源码路径迁移 | 已从 `/home/linaro/hangzhouwan-orign/hangzhouwan` 迁移到 `/home/linaro/hangzhouwan`，旧路径保留兼容软链接 |
+| Release 状态 | `202607221953-3dfcf4e`，含热修补丁，manifest SHA256 校验失效，需重建 |
 
 ---
 
@@ -227,7 +230,7 @@
 
 ### Python 测试
 
-93 项全部通过（skipped=2）
+93 collected，91 passed，2 skipped（ONNX 审计测试因缺少 onnx 包跳过）
 
 ### T1-T10 逐项结果
 
@@ -256,14 +259,14 @@
 - Wants 替代 Requires（停止 Business 不连带停止 Video）
 - tmpfiles.d 管理 `/run/hangzhouwan`（重启任一服务不删除另一方 Socket）
 
-### 300秒灰度结果
+### 300秒灰度结果（阶段7验证时，现已切换正式推流）
 
 - A 路：output=10.0fps, inference=5.0fps, e2e P95=356ms, RSS=26.1MB 稳定, FD=203 稳定, 线程=10 稳定
 - B 路：disconnected（摄像头返回 400 Bad Request，非代码问题）
 - MQTT：connected, AIS 缓存=0（无船经过）
 - JSONL：2752 事件，全 COORD_ONLY
 - systemd 重启：business=1（T9 kill 测试）, video=0
-- 灰度 RTMP：使用 `_bm1684` 后缀 Key，不覆盖 Windows 正式流
+- 灰度 RTMP：阶段7验证时使用 `_bm1684` 后缀 Key（现已切换为正式地址）
 
 ### 降级恢复结果
 
@@ -282,13 +285,15 @@
 - 真实 AIS A/B 各 20 个人工样本（待人工）
 - Windows 回切演练（待人工）
 - systemd enable（L4 + 回切演练通过后）
-- 正式 RTMP 切换（灰度对比 24h 后）
+- 重新构建正式 Release（纳入热修补丁，恢复 manifest SHA256 校验）
 
-### Windows 仍在运行
+### 正式推流已接管（2026-07-23 状态）
 
-- Windows 旧服务继续运行，BM1684 使用灰度 RTMP 地址（`_bm1684` 后缀 Key）
-- 不覆盖 Windows 正式推流地址
+- BM1684 已切换到正式 RTMP 推流地址（无 `_bm1684` 后缀），`forbidden_formal_outputs: []`
+- Windows 旧服务已停止推流，BM1684 直接推流 `HangZhouBridgeNorth8_1` / `HangZhouBridgeNorth3_1`
+- Windows 回切演练仍待人工执行（确认停止 systemd 后 Windows 可正常接管）
 
 ### systemd 是否仍未 enable
 
 - 是，未 enable。需 L4 24 小时长测 + Windows 回切演练通过后才允许 enable。
+- 当前服务通过手动 `systemctl start hangzhouwan.target` 启动，开机不自启。
