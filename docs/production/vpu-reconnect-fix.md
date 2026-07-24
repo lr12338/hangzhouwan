@@ -1,6 +1,6 @@
 # BM1684 视频重连 VPU 显存耗尽：根因与修复
 
-> 状态：根因经代码审查复核确认（见 §1、§2），候选修复 `1a1a7b2` 覆盖根因；本轮补充假健康修复（见 §2.1）。候选
+> 状态（口径修正）：已证实旧版 `3dfcf4e` 存在重连后 VPU/gmem 资源耗尽（见 §1）；强证据支持候选代码修正了旧 epoch/inflight 帧/decoder 关闭顺序（见 §2）；**尚未证实**真实 RTSP 多轮重连后 VPU Heap 完全稳定。代码级修复可信，但**生产根治尚未通过门禁证明**。本轮重建候选 `vpu-reconnect-health-4745180`（见 §2.1、§8），含假健康修复 v2（重连宽限+防抖）。候选
 > `vpu-reconnect-fix-1a1a7b2`。**该 Release 为“维护窗口验证候选”，尚未获维护窗口批准，不可上线。**
 > **本轮未激活、未重启、未切换生产。** 生产仍运行旧二进制（`current -> 202607221953-3dfcf4e`），
 > VPU heap2 接近耗尽，仍存在重连稳定性风险。`cleanup-46a151c` 不再作为上线候选。
@@ -50,7 +50,7 @@
 另外 hzwctl 读取字段名与接口不匹配：`last_frame_time`（实际为 `last_frame_time_ms`）、
 顶层 `queue_length`/`e2e_p95_ms`（实际为每路字段），导致"最近帧/队列/P95"恒显示 `?`。
 
-**修复**（对应运维门禁 6.5）：
+**修复 v2**（对应运维门禁 6.5，本轮在 v1 基础上增加重连宽限期与防抖，避免过度判死/状态抖动）：
 
 | 文件 | 关键改动 |
 |---|---|
@@ -61,8 +61,14 @@
 | `include/video/video_sink.h` | 修正过时注释：RTMP 重连保留编码器（非重建） |
 | `tests/unit_cpp/test_video_health_logic.cpp` | 新增：11 项纯逻辑单测（资源致命/RTSP断开/双路断/FPS低/RTMP断/inference0/重连风暴/全健康/业务降级/A-B隔离/致命优先） |
 
+**v2 改进（避免过度判死与抖动）**：
+- **重连宽限期**：RTSP 断开在 `frame_stale_ms`(15s)~`reconnect_grace_ms`(60s) 视为瞬时重连中(DEGRADED)，不立即判死；超 60s 才 FAILED。瞬时 RTSP 波动不再误判 FAILED。
+- **防抖(StreamHealthDebouncer)**：瞬时 FAILED 立即提交（关键错误/持续断流）；HEALTHY->DEGRADED 需 `confirm_down`(2) 次连续确认（滤毛刺）；降级->恢复需 `confirm_up`(3) 次连续确认（防假恢复抖动）。
+- **阈值集中可配**：`HealthThresholds` 集中定义 frame_stale_ms/reconnect_grace_ms/min_output_fps/reconnect_storm_delta/confirm_down/confirm_up 并写明默认值。
+- systemd active 但数据面失败绝不显示 HEALTHY。
+
 **效果**：B 路断流时 hzwctl 显示 `状态: [DEGRADED] 原因: B路不可用 降级状态: stream_down`，
-不再假健康；VPU 致命时显示 `状态: [FAILED] 原因: 设备资源致命(VPU/gmem)`。
+不再假健康；VPU 致命时显示 `状态: [FAILED] 原因: 设备资源致命(VPU/gmem)`；短暂断流仅 DEGRADED 不 FAILED，恢复需持续健康数据才回到 HEALTHY。
 
 ## 3. 测试结果
 

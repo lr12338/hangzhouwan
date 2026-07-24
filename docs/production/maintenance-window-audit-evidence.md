@@ -50,15 +50,25 @@
 | `test_preflight.py` | ✅ 全部通过 | 预检和激活结构审计（含原有） |
 | `test_systemd_config.py` | ✅ 全部通过 | systemd 配置审计（含原有） |
 | `test_maintenance_window.sh` | ✅ 0 失败 | 生产守卫/软链接/manifest/RTMP/隔离 |
-| 全部 Python 测试 | ✅ 159 passed, 4 error | 4 error 为 `business_sidecar_client_test.py` 缺 `sock` fixture（预存在，非本轮引入） |
-| CTest | ✅ 16/16 passed | 含新增 `video_health_logic`；`stability_script` 在独立环境通过（生产占用时可能超时） |
+| 全部 Python 测试 | ✅ 159 passed, 0 failed, 0 errors, exit=0 | 原 4 error 经定位为 `tools/business/business_sidecar_client_test.py` 独立集成脚本（需启动 sidecar，main() 注入 socket）被 pytest 误收集；已加 `pytest.ini` 限定 testpaths=tests。脚本独立运行通过 |
+| CTest | 15/16（全量），16/16（stability_script 隔离运行） | `stability_script` 为硬件依赖集成测试，生产 VPU 占用时 flaky（全量 exit=8，隔离 exit=0），非本轮引入、非回归 |
 
-## 候选 Release 是否变化
+## 候选 Release
 
-**是，需重建。** 本轮修改了 C++ 代码（假健康修复，见问题 #29）：`video_health_logic.*`、
-`dual_stream_application.*`、`video_health_server.*`、`video_sink.h`、`hzwctl.py`、`test_video_health_logic.cpp`。
-因此候选 Release `vpu-reconnect-fix-1a1a7b2` **不再包含最新修复，不可直接激活**；
-需在新提交上重新执行 `build_release.sh` 生成新候选，并通过 G0–G7 全部门禁后方可激活。
+**已重建为 `vpu-reconnect-health-4745180`**（基于 HEAD `4745180`，含假健康修复 v2：重连宽限+防抖）。
+
+| 项 | 值 |
+|---|---|
+| Release 名称 | `vpu-reconnect-health-4745180` |
+| 路径 | `/opt/hangzhouwan/releases/vpu-reconnect-health-4745180` |
+| Git commit | `4745180` |
+| 构建时间 | 2026-07-24T01:20:09Z |
+| verify_release | 8/8 通过（SHA256+manifest+可执行） |
+| 修改 current | 否 |
+| 修改 previous | 否 |
+| 旧候选 `vpu-reconnect-fix-1a1a7b2` | 已过期（不含假健康修复），不再激活 |
+
+**构建不等于允许激活。** 候选须通过 G0–G7 全部硬门禁（G1 真实 RTSP 100 轮为硬阻断）后方可激活。当前 G1 未执行 -> NO-GO。
 本轮修改的文件（不含此前脚本/测试/文档轮次）：
 
 - `tools/dual_stream/forced_reconnect_run.sh`（运行器）

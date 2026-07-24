@@ -7,16 +7,25 @@
 //   - degradation：none | stream_degraded | stream_down | detection_only | resource_fatal
 //   - 单路 level：HEALTHY | DEGRADED | FAILED
 //
-// 判定规则（对应运维文档 6.5 健康检查门禁，任一持续达到阈值即降级/失败）：
-//   资源致命(VPU/gmem/解码器/编码器 ENOMEM) -> 该路 FAILED
-//   RTSP 断开(最近帧超阈值未更新)         -> 该路 FAILED
-//   output_fps 低于阈值                    -> 该路 DEGRADED
-//   RTMP 断开                              -> 该路 DEGRADED
-//   inference_fps 持续为 0(已连接)         -> 该路 DEGRADED
-//   重连次数短时异常增长                   -> 该路 DEGRADED
+// 判定规则（对应运维门禁 6.5，避免过度判死与状态抖动）：
+//   资源致命(VPU/gmem/解码器/编码器 ENOMEM)       -> 该路 FAILED（立即，最高优先级）
+//   RTSP 断开超 reconnect_grace_ms(持续断流)      -> 该路 FAILED
+//   RTSP 断开在 frame_stale_ms~grace_ms(瞬时/重连中) -> 该路 DEGRADED（宽限期，不立即判死）
+//   output_fps 低于阈值                            -> 该路 DEGRADED
+//   RTMP 断开                                      -> 该路 DEGRADED
+//   inference_fps 持续为 0(已连接)                 -> 该路 DEGRADED
+//   重连次数短时异常增长(重连风暴)                 -> 该路 DEGRADED
+//
+// 防抖(StreamHealthDebouncer)：
+//   - 瞬时等级为 FAILED 时立即提交（关键错误/持续断流，不过度延迟告警）；
+//   - HEALTHY->DEGRADED 需 confirm_down 次连续确认（滤除单采样毛刺）；
+//   - 降级->恢复(HEALTHY)需 confirm_up 次连续确认（避免恢复抖动/假恢复）。
 //
 // 整体：任一路 resource_fatal -> FAILED；双路均 FAILED -> FAILED；
-//       单路 FAILED 或任一路 DEGRADED -> DEGRADED；业务仅检测 -> DEGRADED；否则 HEALTHY。
+//       单路 FAILED -> DEGRADED(突出故障流)；任一路 DEGRADED -> DEGRADED；
+//       业务仅检测 -> DEGRADED；否则 HEALTHY。systemd active 但数据面失败绝不显示 HEALTHY。
+//
+// 所有阈值集中于 HealthThresholds 并写明默认值；调用方可覆盖（生产路径用默认值）。
 // =============================================================================
 #ifndef HZW_MONITORING_VIDEO_HEALTH_LOGIC_H
 #define HZW_MONITORING_VIDEO_HEALTH_LOGIC_H
@@ -30,25 +39,45 @@ enum class StreamHealthLevel { HEALTHY, DEGRADED, FAILED };
 
 // 单路健康输入（由调用方从 PipelineMetrics + pipeline.resource_fatal() 采集）。
 struct StreamHealthInput {
-  bool rtsp_connected = false;      // 最近帧在阈值内更新（now - last_read_ms < stale）
-  bool rtmp_connected = false;      // 近期有成功输出帧
-  double output_fps = 0.0;          // 本采样窗口输出帧率
-  double inference_fps = 0.0;       // 本采样窗口推理帧率
-  bool resource_fatal = false;      // VPU/解码器/编码器资源致命
-  int64_t reconnect_delta = 0;      // 自上次采样以来重连增量（RTSP+RTMP）
+  int64_t disconnected_ms = 0;  // 自上次成功读取帧以来的毫秒数（0=刚读到帧）；last_read_ms==0 时调用方传 0
+  bool rtmp_connected = false;  // 近期有成功输出帧
+  double output_fps = 0.0;      // 本采样窗口输出帧率
+  double inference_fps = 0.0;   // 本采样窗口推理帧率
+  bool resource_fatal = false;  // VPU/解码器/编码器资源致命
+  int64_t reconnect_delta = 0;  // 自上次采样以来重连增量（RTSP+RTMP）
 };
 
-// 健康阈值（可通过配置覆盖，默认值匹配生产验收）。
+// 健康阈值（集中定义，默认值匹配生产验收；调用方可构造自定义值覆盖）。
 struct HealthThresholds {
+  int64_t frame_stale_ms = 15000;       // 超过此值视为 RTSP 断开（最近帧过时）
+  int64_t reconnect_grace_ms = 60000;   // 断开宽限期：[stale,grace) 为瞬时重连(DEGRADED)，>=grace 为持续断流(FAILED)
   double min_output_fps = 5.0;          // 低于此值视为输出降级
   int64_t reconnect_storm_delta = 3;    // 单采样窗口重连增量超此视为重连风暴
+  int confirm_down = 2;                 // HEALTHY->DEGRADED 需连续确认采样数（防毛刺）
+  int confirm_up = 3;                   // 降级->HEALTHY 恢复需连续确认采样数（防抖）
 };
 
-// 单路健康等级。
+// 单路瞬时健康等级（无状态，每次采样计算）。
 StreamHealthLevel compute_stream_level(const StreamHealthInput& s,
                                        const HealthThresholds& t);
 
 const char* level_str(StreamHealthLevel l);
+
+// 单路健康防抖器（有状态，跨采样保持，用于抑制状态抖动）。
+// 语义：瞬时 FAILED 立即提交；其余变化需连续 confirm 次确认。
+class StreamHealthDebouncer {
+ public:
+  // 喂入本采样瞬时等级，返回防抖后提交等级。confirm_down/up 来自 HealthThresholds。
+  StreamHealthLevel update(StreamHealthLevel instantaneous,
+                           int confirm_down, int confirm_up);
+  StreamHealthLevel committed() const { return committed_; }
+  void reset() { committed_ = StreamHealthLevel::HEALTHY; candidate_ = StreamHealthLevel::HEALTHY; streak_ = 0; }
+
+ private:
+  StreamHealthLevel committed_ = StreamHealthLevel::HEALTHY;
+  StreamHealthLevel candidate_ = StreamHealthLevel::HEALTHY;
+  int streak_ = 0;
+};
 
 // 双路整体健康结果。
 struct DualHealthResult {
@@ -59,11 +88,12 @@ struct DualHealthResult {
   std::string reason;        // 人类可读原因（供健康接口/日志）
 };
 
-// 计算双路整体健康。business_full=false 表示业务降级为仅检测（无坐标/AIS）。
-DualHealthResult compute_dual_health(const StreamHealthInput& a,
-                                     const StreamHealthInput& b,
-                                     bool business_full,
-                                     const HealthThresholds& t);
+// 计算双路整体健康（基于已防抖的单路等级）。fatal_a/b 用于区分 resource_fatal 降级类别。
+// business_full=false 表示业务降级为仅检测（无坐标/AIS）。
+DualHealthResult compute_dual_status(StreamHealthLevel level_a,
+                                     StreamHealthLevel level_b,
+                                     bool fatal_a, bool fatal_b,
+                                     bool business_full);
 
 }  // namespace hzw
 

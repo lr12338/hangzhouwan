@@ -19,6 +19,7 @@
 #include <thread>
 #include "pipeline/single_stream_pipeline.h"
 #include "monitoring/video_health_server.h"
+#include "monitoring/video_health_logic.h"
 
 namespace hzw {
 
@@ -67,6 +68,9 @@ class DualStreamApplication {
   // 上次采样时的重连累计值，用于计算单窗口重连增量（重连风暴检测）
   int64_t prev_reconnect_a_ = 0;
   int64_t prev_reconnect_b_ = 0;
+  // 单路健康防抖器（跨采样保持，抑制状态抖动/假恢复）
+  StreamHealthDebouncer debouncer_a_;
+  StreamHealthDebouncer debouncer_b_;
 };
 
 }  // namespace hzw

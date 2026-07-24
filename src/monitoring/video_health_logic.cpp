@@ -3,6 +3,18 @@
 
 namespace hzw {
 
+namespace {
+// 严重度排序：HEALTHY(0) < DEGRADED(1) < FAILED(2)。
+int severity(StreamHealthLevel l) {
+  switch (l) {
+    case StreamHealthLevel::HEALTHY: return 0;
+    case StreamHealthLevel::DEGRADED: return 1;
+    case StreamHealthLevel::FAILED: return 2;
+  }
+  return 2;
+}
+}  // namespace
+
 const char* level_str(StreamHealthLevel l) {
   switch (l) {
     case StreamHealthLevel::HEALTHY: return "HEALTHY";
@@ -14,34 +26,64 @@ const char* level_str(StreamHealthLevel l) {
 
 StreamHealthLevel compute_stream_level(const StreamHealthInput& s,
                                        const HealthThresholds& t) {
-  // 资源致命：VPU/gmem 分配失败或解码器/编码器初始化失败 -> FAILED
+  // 资源致命：VPU/gmem 分配失败或解码器/编码器初始化失败 -> FAILED（最高优先级）
   if (s.resource_fatal) return StreamHealthLevel::FAILED;
-  // RTSP 断开（最近帧超阈值未更新，调用方据此设 rtsp_connected=false）-> FAILED
-  if (!s.rtsp_connected) return StreamHealthLevel::FAILED;
-  // 已连接但输出持续不足 -> DEGRADED
+  // RTSP 断开分级：持续断流(>=grace) -> FAILED；瞬时断流/重连中(stale~grace) -> DEGRADED
+  if (s.disconnected_ms >= t.reconnect_grace_ms) return StreamHealthLevel::FAILED;
+  if (s.disconnected_ms >= t.frame_stale_ms) return StreamHealthLevel::DEGRADED;
+  // 已连接（最近帧在 stale 阈值内）
   if (s.output_fps < t.min_output_fps) return StreamHealthLevel::DEGRADED;
-  // RTMP 断开（有解码输入但无 RTMP 输出）-> DEGRADED
   if (!s.rtmp_connected) return StreamHealthLevel::DEGRADED;
-  // 推理持续为 0（已连接却无推理）-> DEGRADED
   if (s.inference_fps <= 0.0) return StreamHealthLevel::DEGRADED;
-  // 重连风暴（短时反复重连）-> DEGRADED
   if (s.reconnect_delta > t.reconnect_storm_delta) return StreamHealthLevel::DEGRADED;
   return StreamHealthLevel::HEALTHY;
 }
 
-DualHealthResult compute_dual_health(const StreamHealthInput& a,
-                                     const StreamHealthInput& b,
-                                     bool business_full,
-                                     const HealthThresholds& t) {
-  DualHealthResult r;
-  r.level_a = compute_stream_level(a, t);
-  r.level_b = compute_stream_level(b, t);
+StreamHealthLevel StreamHealthDebouncer::update(StreamHealthLevel instantaneous,
+                                                int confirm_down, int confirm_up) {
+  if (confirm_down < 1) confirm_down = 1;
+  if (confirm_up < 1) confirm_up = 1;
+  // 瞬时 FAILED 立即提交：关键错误/持续断流不应被防抖延迟告警。
+  if (instantaneous == StreamHealthLevel::FAILED) {
+    committed_ = StreamHealthLevel::FAILED;
+    candidate_ = StreamHealthLevel::FAILED;
+    streak_ = 0;
+    return committed_;
+  }
+  // 已处于该等级：重置候选，保持稳定。
+  if (instantaneous == committed_) {
+    candidate_ = instantaneous;
+    streak_ = 0;
+    return committed_;
+  }
+  // 状态变化：累计连续确认次数。恶化用 confirm_down，恢复用 confirm_up。
+  if (instantaneous != candidate_) {
+    candidate_ = instantaneous;
+    streak_ = 1;
+  } else {
+    ++streak_;
+  }
+  int need = (severity(instantaneous) > severity(committed_)) ? confirm_down : confirm_up;
+  if (streak_ >= need) {
+    committed_ = candidate_;
+    streak_ = 0;
+  }
+  return committed_;
+}
 
-  const bool any_fatal = a.resource_fatal || b.resource_fatal;
-  const bool a_failed = (r.level_a == StreamHealthLevel::FAILED);
-  const bool b_failed = (r.level_b == StreamHealthLevel::FAILED);
-  const bool a_degraded = (r.level_a == StreamHealthLevel::DEGRADED);
-  const bool b_degraded = (r.level_b == StreamHealthLevel::DEGRADED);
+DualHealthResult compute_dual_status(StreamHealthLevel level_a,
+                                     StreamHealthLevel level_b,
+                                     bool fatal_a, bool fatal_b,
+                                     bool business_full) {
+  DualHealthResult r;
+  r.level_a = level_a;
+  r.level_b = level_b;
+
+  const bool any_fatal = fatal_a || fatal_b;
+  const bool a_failed = (level_a == StreamHealthLevel::FAILED);
+  const bool b_failed = (level_b == StreamHealthLevel::FAILED);
+  const bool a_degraded = (level_a == StreamHealthLevel::DEGRADED);
+  const bool b_degraded = (level_b == StreamHealthLevel::DEGRADED);
 
   if (any_fatal) {
     r.status = "FAILED";

@@ -200,21 +200,26 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       else { biz_state = "DETECTION_ONLY"; }
       hs.business_state = biz_state;
 
-      // 单路健康输入：RTSP 连接性（最近帧阈值）、RTMP 输出、FPS、资源致命、重连增量
-      const int64_t frame_stale_ms = 15000;
-      bool a_rtsp = (now - ma.last_read_ms.load()) < frame_stale_ms;
-      bool b_rtsp = (now - mb.last_read_ms.load()) < frame_stale_ms;
+      // 单路健康输入：RTSP 断开时长（瞬时/持续分级）、RTMP 输出、FPS、资源致命、重连增量
+      HealthThresholds ht;
+      const int64_t lr_a = ma.last_read_ms.load();
+      const int64_t lr_b = mb.last_read_ms.load();
+      // last_read_ms==0（从未读到帧，启动期）视为未断开，避免启动即判死
+      int64_t disc_a = (lr_a == 0) ? 0 : (now - lr_a);
+      int64_t disc_b = (lr_b == 0) ? 0 : (now - lr_b);
+      bool a_rtsp = disc_a < ht.frame_stale_ms;
+      bool b_rtsp = disc_b < ht.frame_stale_ms;
       int64_t recon_a = ma.rtsp_reconnects.load() + ma.rtmp_reconnects.load();
       int64_t recon_b = mb.rtsp_reconnects.load() + mb.rtmp_reconnects.load();
       StreamHealthInput in_a;
-      in_a.rtsp_connected = a_rtsp;
+      in_a.disconnected_ms = disc_a;
       in_a.rtmp_connected = (cur_out_a > prev_output_a_) || (fps_out_a > 0);
       in_a.output_fps = fps_out_a;
       in_a.inference_fps = fps_inf_a;
       in_a.resource_fatal = pipeline_a_.resource_fatal();
       in_a.reconnect_delta = recon_a - prev_reconnect_a_;
       StreamHealthInput in_b;
-      in_b.rtsp_connected = b_rtsp;
+      in_b.disconnected_ms = disc_b;
       in_b.rtmp_connected = (cur_out_b > prev_output_b_) || (fps_out_b > 0);
       in_b.output_fps = fps_out_b;
       in_b.inference_fps = fps_inf_b;
@@ -223,8 +228,14 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       prev_reconnect_a_ = recon_a;
       prev_reconnect_b_ = recon_b;
 
-      HealthThresholds ht;
-      DualHealthResult hr = compute_dual_health(in_a, in_b, business_full, ht);
+      // 瞬时等级 -> 防抖（FAILED 立即提交，DEGRADED/恢复需连续确认）-> 整体状态
+      StreamHealthLevel inst_a = compute_stream_level(in_a, ht);
+      StreamHealthLevel inst_b = compute_stream_level(in_b, ht);
+      StreamHealthLevel lvl_a = debouncer_a_.update(inst_a, ht.confirm_down, ht.confirm_up);
+      StreamHealthLevel lvl_b = debouncer_b_.update(inst_b, ht.confirm_down, ht.confirm_up);
+      DualHealthResult hr = compute_dual_status(lvl_a, lvl_b,
+                                                in_a.resource_fatal, in_b.resource_fatal,
+                                                business_full);
       hs.status = hr.status;
       hs.degradation = hr.degradation;
       hs.health_reason = hr.reason;
