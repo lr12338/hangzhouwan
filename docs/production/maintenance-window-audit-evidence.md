@@ -235,3 +235,75 @@ stability_script **隔离**失败为已知测试基础设施缺陷（坏 bmodel 
 
 位于 `docs/production/audit-evidence/`：baseline-*.log、prebuild-tests-*.log、ctest-full-*.log、
 build-release-*.log、activate-*.log、observation-loop.log、observe_loop.sh。
+
+---
+
+## RTMP PTS 修复紧急部署记录 (2026-07-24 下午)
+
+> 针对 1eba419 部署后发现的 B 路 RTMP 推流自循环（muxer-only 重连 PTS 重置致
+> `pts<dts` 永久写帧失败），修复并部署验证。
+
+### 根因回顾
+
+`1a1a7b2` 将 RTMP 重连改为 muxer-only（保留编码器不重建）以修 VPU 显存 churn，
+但遗留 `a459e10` 初版的 `pts_.reset()`。编码器不重建时 DTS 续接递增，PTS 被 reset
+归零 -> `pts<dts` 致 FLV `av_interleaved_write_frame` 本地拒绝 -> 立即又重连 ->
+永久自循环。B 路摄像机 301 通道取流抖动（首次写失败触发）+ 该 bug = B 路 0.5fps、
+RTMP 重连数千次。A 路 801 取流稳定从不进入该路径故正常。
+
+### 修复
+
+提交 `9d449ab` `fix(video): 修复RTMP muxer-only重连PTS重置致推流自循环`：
+- `src/video/sophon_ffmpeg_sink.cpp` `reconnect_rtmp()` 删除 `pts_.reset()`；
+  muxer-only 重连 PTS 续接以与编码器续接 DTS 同步（IPPP max_b_frames=0 -> DTS==PTS）。
+- 修正误导注释与日志（"PTS已重置" -> "PTS续接"）。
+- `include/video/video_sink.h` 补充 `reset()` 使用约束文档。
+- `tests/unit_cpp/test_output_pts.cpp` 新增 muxer-only 重连 PTS 续接回归测试 + 反证。
+
+### 测试
+
+cmake build exit 0；ctest 16/16（含 output_pts/rtmp_reconnect_decision/stability_script）；
+pytest 159 passed；二进制确认含"PTS续接"日志、旧"PTS已重置"已消失。
+
+### 部署
+
+- Release：`vpu-rtmp-pts-fix-20260724-9d449ab`，manifest commit=9d449ab，verify_release 8/8。
+- 激活：`activate_release.sh`（root），exit 0，70s。preflight 40/0，原子切换，60s smoke，PID 核验通过。
+- 激活前 current=vpu-reconnect-health-20260724-1eba419，激活后 current=9d449ab、previous=1eba419。
+
+### 验证结果（15 分钟观察 T+2/5/10/15）
+
+| 时间点 | uptime | A out_fps | A rtmp_rc | B out_fps | B rtmp_rc | pts<dts | VPU err | NRestarts |
+|-------|--------|----------|----------|----------|----------|---------|---------|-----------|
+| T+2 | 220s | 5.5 | 63 | 3.7 | 60 | 0 | 0 | 0 |
+| T+5 | 400s | 5.8 | 115 | 3.7 | 87 | 0 | 0 | 0 |
+| T+10 | 700s | 5.4 | 203 | 0.7 | 171 | 0 | 0 | 0 |
+| T+15 | 1000s | 5.6 | 292 | 2.0 | 260 | 0 | 0 | 0 |
+
+**B 路 RTMP 自循环已消除**：所有检查点 `pts<dts=0`（修复前数百/数千），
+B output_fps 从永久 0.5 恢复至 0.7–3.7（随摄像机 301 送达帧波动），
+RTMP connected=true，输出帧持续增长（1412->1509+）。重连速率线性（~15/min），
+非旧版指数自循环。VPU 零错误、NRestarts=0、无重启循环。
+
+**残留外部问题（非本次修复引入）**：
+1. B 路摄像机 301 通道取流灾难性不稳：`最近输入` 最大 79861ms（80 秒空档），
+   中位 976ms，8/30 采样 >10s。A 路 801 稳定（max 88ms）。此为摄像机端问题。
+2. 双路 RTMP 均有 ~15–18/min 重连（服务器约每 3.5s 丢连接）：写帧成功约 2s 后失败
+   （非立即拒绝 -> 排除 PTS/时间戳问题；非带宽 -> TX 仅 1.0Mbps、0 丢包）。
+   该写失败发生在 `av_interleaved_write_frame`（网络/服务器层），本次代码改动
+   （仅 `reconnect_rtmp` 内 PTS 处理）无法导致写失败。A 路（取流稳定）亦受影响，
+   表明为服务器/网络外部条件。1eba419 时 A 路 0 重连——疑似 B 路自循环时未实际
+   推流至服务器，服务器仅见 A 单路；修复后 B 实际推流，服务器双路并发可能触发
+   限速/丢连（待查证）。
+
+### 结论
+
+修复达成目标：B 路 RTMP 自循环（`pts<dts` 永久失败）已消除，B 输出从 0.5fps 恢复。
+残留 RTMP 重连与 B 摄像机 301 不稳为独立外部问题，需后续排查（服务器并发推流策略、
+摄像机 301 通道码流/固件）。本次不回滚（回滚将恢复 B 自循环且无益于外部问题）。
+
+### Git
+
+- 修复提交：`9d449ab`（仅 src/include/tests，无产品代码外改动）
+- 审计文档提交：见下方 SHA
+- 推送：origin/feat/bm1684-edge-deployment
