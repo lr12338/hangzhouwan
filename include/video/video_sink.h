@@ -61,6 +61,12 @@ enum class RtmpReconnectAction {
 };
 RtmpReconnectAction decide_rtmp_reconnect(int send_frame_err, bool encoder_open);
 
+// RTMP 重连日志节流决策（纯逻辑，可独立单元测试）。
+// 基于累计重连次数 reconnect_count：第 0 次（首次）及每 interval 倍数次返回 true（输出日志），
+// 其余返回 false（静默）。interval=10 时约 1/10 日志量。
+// 失败（open_rtmp_muxer 失败）和致命始终输出，不受此节流控制。
+bool should_log_rtmp_reconnect(int reconnect_count, int interval);
+
 class SophonVideoSink {
  public:
   SophonVideoSink() = default;
@@ -116,6 +122,9 @@ class SophonVideoSink {
   void sleep_interruptible(int64_t ms);
   void drain_packets(std::string& err);
   void mark_resource_fatal(const std::string& reason);
+  // RTMP 重连日志节流：返回 true 表示本次应输出日志，false 表示静默。
+  // 首次（suppressed==0）或每 RTMP_LOG_INTERVAL 次输出一次汇总。
+  bool should_log_rtmp_reconnect();
 
   AVFormatContext* mux_ = nullptr;      // 输出封装上下文
   AVCodecContext* enc_ = nullptr;       // h264_bm 编码器
@@ -131,6 +140,9 @@ class SophonVideoSink {
   std::atomic<bool> stop_requested_{false};
   RtmpBackoffPolicy rtmp_backoff_;
   int rtmp_reconnect_count_ = 0;
+  // RTMP 重连日志节流：首次及每 RTMP_LOG_INTERVAL 倍数次输出 1 条，
+  // 避免高频重连（~118 行/分钟）撑满 journal。失败/致命始终输出。
+  static constexpr int RTMP_LOG_INTERVAL = 10;
   std::atomic<int64_t> total_output_frames_{0};  // 实际写入总帧数（不受 PTS 重置影响）
   // 保存重连所需的参数
   std::string output_url_;

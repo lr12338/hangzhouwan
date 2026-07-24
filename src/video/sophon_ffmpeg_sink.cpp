@@ -12,6 +12,12 @@
 namespace hzw {
 
 // ---- RTMP 重连动作决策（纯逻辑）----
+bool should_log_rtmp_reconnect(int reconnect_count, int interval) {
+  // 首次（count==0）及每 interval 倍数次输出一条日志，其余静默。
+  if (reconnect_count == 0) return true;
+  return (reconnect_count % interval) == 0;
+}
+
 RtmpReconnectAction decide_rtmp_reconnect(int send_frame_err, bool encoder_open) {
   if (!encoder_open) return RtmpReconnectAction::ESCALATE_FATAL;
   if (send_frame_err == AVERROR(ENOMEM)) return RtmpReconnectAction::ESCALATE_FATAL;
@@ -302,6 +308,10 @@ void SophonVideoSink::teardown_muxer_encoder() {
   }
 }
 
+bool SophonVideoSink::should_log_rtmp_reconnect() {
+  return hzw::should_log_rtmp_reconnect(rtmp_reconnect_count_, RTMP_LOG_INTERVAL);
+}
+
 bool SophonVideoSink::reconnect_rtmp(std::string& err) {
   // 普通网络断开仅重建 muxer/AVIO，绝不重建硬件编码器。
   // 编码器致命（ENOMEM/未打开）升级 DEVICE_RESOURCE_FATAL，禁止错误风暴。
@@ -311,6 +321,8 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
     return false;
   }
   teardown_muxer();  // 仅释放 muxer+AVIO，保留 enc_
+  // 每次重连循环只决策一次日志输出，避免单循环内多次调用节流偏快。
+  const bool log_this_cycle = should_log_rtmp_reconnect();
   while (true) {
     if (stop_requested_.load()) {
       err = "停止";
@@ -321,10 +333,12 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
       return false;
     }
     int64_t backoff = rtmp_backoff_.on_failure();
-    std::fprintf(stdout,
-                 "信息 | RTMP重连 | BACKOFF 第%d次 退避%lldms（仅重建muxer）\n",
-                 rtmp_backoff_.attempts(), static_cast<long long>(backoff));
-    std::fflush(stdout);
+    if (log_this_cycle) {
+      std::fprintf(stdout,
+                   "信息 | RTMP重连 | BACKOFF 第%d次 退避%lldms（仅重建muxer，每%d次汇总）\n",
+                   rtmp_backoff_.attempts(), static_cast<long long>(backoff), RTMP_LOG_INTERVAL);
+      std::fflush(stdout);
+    }
     sleep_interruptible(backoff);
     if (stop_requested_.load()) {
       err = "停止";
@@ -341,9 +355,11 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
     // 故 PTS 必须续接（不可 reset），否则 PTS 归零 < DTS 致 FLV 写帧永久失败。
     rtmp_backoff_.on_success();
     ++rtmp_reconnect_count_;
-    std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS续接，编码器未重建）\n",
-                 rtmp_reconnect_count_);
-    std::fflush(stdout);
+    if (log_this_cycle) {
+      std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS续接，编码器未重建，每%d次汇总）\n",
+                   rtmp_reconnect_count_, RTMP_LOG_INTERVAL);
+      std::fflush(stdout);
+    }
     return true;
   }
 }
@@ -408,8 +424,11 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
   drain_packets(write_err);
   // RTMP 模式：写入失败时尝试重连并重试
   if (sink_type_ == "rtmp" && !write_err.empty()) {
-    std::fprintf(stdout, "信息 | RTMP重连 | 写入失败：%s，进入重连流程\n", write_err.c_str());
-    std::fflush(stdout);
+    if (should_log_rtmp_reconnect()) {
+      std::fprintf(stdout, "信息 | RTMP重连 | 写入失败：%s，进入重连流程（每%d次汇总）\n",
+                   write_err.c_str(), RTMP_LOG_INTERVAL);
+      std::fflush(stdout);
+    }
     // 重连后 PTS 续接（muxer-only 不重置），重新写入当前帧
     if (!reconnect_rtmp(err)) return false;
     // 重连成功后重新写入当前帧

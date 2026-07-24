@@ -9,6 +9,7 @@
 
 using hzw::decide_rtmp_reconnect;
 using hzw::RtmpReconnectAction;
+using hzw::should_log_rtmp_reconnect;
 
 static int g_failures = 0;
 #define CHECK(cond)                                                          \
@@ -47,6 +48,36 @@ int main() {
     // 关键回归：旧实现 RTMP 重连无条件重建编码器；新实现 ENOMEM 立即熔断。
     auto a = decide_rtmp_reconnect(AVERROR(ENOMEM), true);
     CHECK(a == RtmpReconnectAction::ESCALATE_FATAL);
+  }
+
+  // ---- 5) RTMP 重连日志节流：首次及每 10 次输出，其余静默 ----
+  {
+    constexpr int INTERVAL = 10;
+    // 首次（count=0）总是输出
+    CHECK(should_log_rtmp_reconnect(0, INTERVAL) == true);
+    // 1-9 静默
+    for (int i = 1; i < 10; ++i) {
+      CHECK(should_log_rtmp_reconnect(i, INTERVAL) == false);
+    }
+    // 10 输出
+    CHECK(should_log_rtmp_reconnect(10, INTERVAL) == true);
+    // 11-19 静默
+    for (int i = 11; i < 20; ++i) {
+      CHECK(should_log_rtmp_reconnect(i, INTERVAL) == false);
+    }
+    // 20 输出
+    CHECK(should_log_rtmp_reconnect(20, INTERVAL) == true);
+    // 100 输出
+    CHECK(should_log_rtmp_reconnect(100, INTERVAL) == true);
+    // 105 静默
+    CHECK(should_log_rtmp_reconnect(105, INTERVAL) == false);
+    // 验证 1000 次重连日志量：count 0..999，输出条件 count==0||count%10==0
+    // -> 0,10,20,...,990 共 100 条，日志量降至 10%（vs 不节流 1000 条）
+    int log_count = 0;
+    for (int i = 0; i < 1000; ++i) {
+      if (should_log_rtmp_reconnect(i, INTERVAL)) ++log_count;
+    }
+    CHECK(log_count == 100);
   }
 
   if (g_failures == 0) std::cout << "通过 | RTMP 重连决策单元测试全部通过\n";
