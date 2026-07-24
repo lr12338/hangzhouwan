@@ -43,6 +43,8 @@ _0.dat
 .env
 config/application.yaml
 config/logging.yaml
+config/video.env
+config/business.env
 
 # ===== 运行时数据与构建产物 =====
 data/

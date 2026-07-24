@@ -88,7 +88,7 @@
 - `tools/hzwctl.py`（状态展示 + 字段名修正）
 - `tests/unit_cpp/test_video_health_logic.cpp`（单测，新增）
 - `CMakeLists.txt`（注册新源与测试）
-- `docs/production/vpu-reconnect-fix.md` / `operations-guide.md` / `maintenance-window-runbook.md`（文档）
+- `docs/history/31-vpu-reconnect-fix.md` / `operations-guide.md` / `maintenance-window-runbook.md`（文档）
 
 候选 Release 需在新提交上重建并通过门禁后方可激活。
 

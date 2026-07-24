@@ -20,13 +20,13 @@
 | 2 | ONNX 审计 + bmodel 转换 | ✅ 完成 | x86 F32 转换和数值验证通过 |
 | 2B | 板端 bmodel 加载与兼容性验证 | ✅ 完成 | bmrt_test + bmrt_load_test 通过 |
 | 3 | 单图 C++ 推理 PoC | ✅ 完成 | 单图 PoC 通过（精度对照待 x86 基线） |
-| 4 | 单路硬件视频管线 PoC | 🔶 | 功能通过+300s验证/30min·2h待人工 |
-| 4.2 | 单路 RTSP 输入到本地文件 | 🔶 | 代码+单元测试+连接路径验证通过；实流/长时待人工 |
+| 4 | 单路硬件视频管线 PoC | ✅ | 功能通过，已集成双路生产 |
+| 4.2 | 单路 RTSP 输入到本地文件 | ✅ | RTSP 取流+重连已上线生产 |
 | 5 | 坐标映射 + AIS 迁移 | ✅ 完成 | sklearn 坐标预测 + AIS/MQTT 订阅已上线运行 |
 | 6 | 双路 Pipeline 整合 | ✅ 完成 | A/B 双路正式推流运行中 |
-| 7 | 生产部署 + 无人值守 | ✅ | T1-T10通过，L1-L4待人工 |
-| 8 | 分级稳定性验证 | 🔶 | T1-T10通过，L1-L4待人工 |
-| 9 | 代码收口 + GitHub 交付 | ⏳ | PR 合并 |
+| 7 | 生产部署 + 无人值守 | ✅ | 生产运行中，开机自启已 enable |
+| 8 | 分级稳定性验证 | 🔶 | 短时验证通过，长稳 2-4h 待维护窗口 |
+| 9 | 代码收口 + GitHub 交付 | ✅ | 已推送 `feat/bm1684-edge-deployment` |
 
 图例：✅ 完成 · 🔶 进行中/部分完成 · ⏳ 待启动
 
@@ -48,9 +48,9 @@
 | 文档 | 用途 |
 |---|---|
 | [生产运维手册](docs/production/operations-guide.md) | 启动、停止、状态、日志、配置、升级、回滚、故障处理 |
-| [阶段7实装验证报告](docs/production/stage7-validation-guide.md) | T1-T10 短测方法与实际结果 |
+| [维护窗口 Runbook](docs/production/maintenance-window-runbook.md) | VPU 重连修复门禁/步骤/回滚 |
+| [部署审计证据](docs/production/maintenance-window-audit-evidence.md) | 生产部署记录（1eba419/9d449ab/c008eac） |
 | [人工长时测试指南](docs/production/manual-long-run-guide.md) | L1-L4 长测执行步骤和验收标准 |
-| [Windows替换与回滚方案](docs/production/windows-replacement-plan.md) | 灰度替换步骤和回切流程 |
 
 **快速操作：**
 - 启动服务：`sudo systemctl start hangzhouwan.target`
@@ -142,7 +142,7 @@ hangzhouwan/
 │   ├── 06-stage2-onnx-audit-and-bmodel.md   # 阶段2 ONNX审计与bmodel
 │   ├── 15-stage2b-board-model-validation.md  # 阶段2B 板端模型验证
 │   ├── 16-stage3-single-image-cpp-poc.md     # 阶段3 单图C++推理PoC
-│   ├── PROGRESS.md                    # 阶段进度跟踪（唯一权威索引）
+│   ├── PROGRESS.md                    # 当前生产状态权威索引
 │   ├── AGENT_HANDOFF.md               # Agent 接手提示词
 │   └── credential-rotation-checklist.md     # 凭据轮换清单
 ├── requirements/                      # 依赖分类（阶段1新增）
