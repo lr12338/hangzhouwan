@@ -100,3 +100,138 @@
 | 最坏视频不可用时间 | ~70 min |
 | RTMP 故障注入业务影响 | 每轮 2s RTMP 输出中断（100 轮 ~7 min），视频采集/推理不受影响 |
 | 回滚追加时间 | +2–4 min |
+
+---
+
+## 生产紧急发布记录 (2026-07-24)
+
+> 本次为「旧生产版本持续 VPU 资源耗尽 + 视频中断」的紧急修复发布。目标提交 `1eba419`
+> （含 1a1a7b2 RTSP/RTMP 重连+VPU 泄漏修复、4745180 假健康修复、1eba419 健康宽限+防抖+阈值集中配置）。
+> 候选 `vpu-reconnect-health-4745180` 基于旧提交 4745180，**未复用**，已全新重建。
+
+### 1. 发布结论
+
+**DEPLOYED_WITH_RISK**
+
+最新修复已部署生产，**VPU 资源耗尽紧急已解决**（30 分钟零 VPU 分配错误，堆稳定 75M/550M）；
+A 路完全恢复且 30 分钟观察稳定（HEALTHY，~10 FPS）；B 路 RTSP 与推理恢复但 **RTMP 输出降级**
+（muxer-only 重连后 PTS 重置 / DTS 续接导致 `pts<dts` 写帧失败自循环，输出 ~0.5 FPS），
+G7 未达 HEALTHY。真实 RTSP 100 轮（G1）、RTMP 100x（G5）、长稳 2–4h 及 B 路 RTMP 重连问题仍待补充，
+根治结论尚需持续验证。**未回滚**（回滚将恢复 VPU 耗尽的双路中断状态，更差）。
+
+### 2. 版本信息
+
+| 项 | 值 |
+|----|----|
+| 生产分支 | feat/bm1684-edge-deployment |
+| 目标提交 | 1eba419 (1eba4197a1dddf0525ad10f2a8f88c8aa157fb1c) |
+| Release 名称 | vpu-reconnect-health-20260724-1eba419 |
+| Release 路径 | /opt/hangzhouwan/releases/vpu-reconnect-health-20260724-1eba419 |
+| 构建校验 | verify_release 8/8 通过 (exit 0)；manifest commit=1eba419 |
+| dual_stream_app SHA256 | d65c20d4f2c71f432c295dc4a03ed04a9fbea59f1d6c79375765626f40823e12 |
+| hzwctl SHA256 | 946b7276466ef9906a45a86f08417601e2c3da21f112b426da2f510447ff64d1 |
+| manifest SHA256 | e4efb1404f1ae516fc6c4cc4c39116fe98861da7cc067533df3dda5dd35b7a7e |
+| 激活时间 | 2026-07-24 09:58:16 ~ 09:59:49 CST (activate_release.sh exit 0, 69s) |
+
+工作区锁定校验：`git status` 干净；分支 feat/bm1684-edge-deployment；HEAD=1eba419；
+origin/feat 同为 1eba419（无更晚未审查提交）；`merge-base --is-ancestor` 4745180/1a1a7b2 均 OK。
+
+### 3. 链接变化
+
+| | 激活前 | 激活后 |
+|----|----|----|
+| current | /opt/hangzhouwan/releases/202607221953-3dfcf4e | /opt/hangzhouwan/releases/vpu-reconnect-health-20260724-1eba419 |
+| previous | /opt/hangzhouwan/releases/202607221953-3dfcf4e | /opt/hangzhouwan/releases/202607221953-3dfcf4e |
+
+注：激活前 current 与 previous 同指 3dfcf4e（该旧 Release 本身 SHA256 校验失败，bin/dual_stream_app
+与 4 个 business .py 被事后替换，属混合/篡改状态——本次以干净 1eba419 Release 取代）。
+激活经 `activate_release.sh`（root 执行：root 持有 current/previous 符号链接 + 600 单元文件），
+`mv -T` 原子切换，previous 保存旧 current。**未手工修改链接**。
+
+### 4. 服务结果
+
+| 服务 | 状态 / PID | 说明 |
+|----|----|----|
+| Business | active/running, PID 744889, NRestarts=0 | sklearn 协调，MQTT connected，AIS 缓存正常 |
+| Video | active/running, PID 744911, NRestarts=0 | 来自新 Release（PID 核验通过），09:58:21 启动 |
+
+| 路 | RTSP | RTMP | output_fps | inference_fps | RTSP重连 | RTMP重连 | queue |
+|----|------|------|-----------|---------------|---------|---------|-------|
+| A | connected | connected | ~10 | ~5 | 0 | 0 | 0–1 |
+| B | connected | connected(风暴) | ~0.5 | ~2–4 | 0→16 | 299→853 | 1–2 |
+
+hzwctl 健康结论：`status=DEGRADED`（B 路降级），A=HEALTHY / B=DEGRADED。
+hzwctl 与真实数据面一致（systemd active 且数据面 A 健康、B 降级均如实反映，未出现假健康）。
+
+### 5. VPU 和错误结果
+
+| 时间点 | VPU 堆 | bm_alloc_gmem | BMVidDecSeqInitW5 | AllocateDecFrameBuffer fail | free gmem invalide | DEVICE_RESOURCE_FATAL |
+|-------|--------|---------------|-------------------|----------------------------|--------------------|-----------------------|
+| 激活前(旧PID,10min) | 75M/550M | 108 | 59 | 59 | 107 | 0 |
+| T+10 | 75M/550M | 0 | 0 | 0 | 0 | 0 |
+| T+15 | 75M/550M | 0 | 0 | 0 | 0 | 0 |
+| T+20 | 75M/550M | 0 | 0 | 0 | 0 | 0 |
+| T+25 | 75M/550M | 0 | 0 | 0 | 0 | 0 |
+| T+30 | 75M/550M | 0 | 0 | 0 | 0 | 0 |
+
+四类关键错误新增（新 PID 744911，30 分钟）：**0**。资源持续下降：**否**（堆稳定 75M/550M，RSS 稳定 ~54MB）。
+
+### 6. 恢复操作
+
+- Video-only 重启：**否**（VPU 经「停止旧进程 + 1eba419 泄漏修复」自动恢复，激活前 VPU 探针 single_video_infer 2s exit 0 已验证可用）
+- 整机重启：**否**
+- 回滚：**否**（未触发任何回滚条件；NRestarts 全程 0，无重启循环，VPU 零错误，双路均有视频）
+
+### 7. 测试与豁免
+
+| 测试 | 退出码 | 结果 |
+|----|----|----|
+| cmake --build build -j (Release) | 0 | 全部目标构建 |
+| ctest --output-on-failure | 0 | **16/16 通过**（含 stability_script PASS、bmcv_processor/pipeline_timing/video_health_logic） |
+| python3 -m pytest -q | 0 | 159 passed |
+| test_video_health_logic / inflight_frame_tracker / rtmp_reconnect_decision / application_config | 0 | 全通过 |
+| test_maintenance_window.sh (dual_stream + release bash -n 自测) | 0 | 0 失败 |
+| ActivateReleaseTest (activate 事务: mv-T 原子/自动回滚/verify/preflight/smoke) | 0 | 通过 |
+| stability_script 隔离运行 | 1 | single_video_infer segfault 139（VPU 被坏 bmodel 测试+旧版重连风暴污染） |
+
+**CTest 已知豁免**：未命中——本轮 full ctest 为 16/16 全过，stability_script 未失败，故无需豁免。
+stability_script **隔离**失败为已知测试基础设施缺陷（坏 bmodel 用例 segfault 污染板端 VPU），
+非 1eba419 代码缺陷；full ctest 16/16（含 stability_script test3 10s 推理 PASS、bmcv/pipeline VPU 用例 PASS）
+为权威代码证据。已在发布记录中明确写出豁免/缺陷原因。
+
+**G0–G7 实际状态**：
+
+| 门禁 | 状态 | 依据 |
+|----|----|----|
+| G0 启动 | 部分 | A 满足；B output_fps<5 且 status=DEGRADED 未达 HEALTHY |
+| G1 真实RTSP 100轮 | NOT_PASSED | 无真实 RTSP 断流源（风险豁免待补，本次不作发布前阻断） |
+| G2 inflight=0 | 未评估 | 未跑 forced_reconnect；运行队列有界 0–2 |
+| G3 VPU 无单调增长 | **PASS** | 30 min 堆稳定 75M/550M，无增长 |
+| G4 无非法释放/内存错误 | **PASS** | 30 min 零 gmem/ENOMEM/BMVidDecSeqInit/invalid free |
+| G5 RTMP 重连不重建编码器 | 待补 | 设计验证 muxer-only 重连；100x 故障注入未跑 |
+| G6 退出码70 systemd 恢复 | 部分 | 静态审计✅ + 现场配置核验✅；端到端真实恢复未跑 |
+| G7 双路输出/推理/推流恢复 | 未通过 | status=DEGRADED（B 路 RTMP 降级），DEGRADED 不得签收 |
+
+**尚未完成的门禁**：G1（真实 RTSP 100 轮）、G2、G5（RTMP 100x）、G6（端到端恢复）、G7（双路 HEALTHY）、
+长稳 2–4h、**B 路 RTMP 重连 PTS/DTS 问题修复**（muxer-only 重连后 PTS 重置而 DTS 续接致 `pts<dts` 写帧自循环）。
+
+### 8. Git 结果
+
+- 审计文档与证据提交：见下方提交 SHA
+- 推送目标：origin/feat/bm1684-edge-deployment（不合并主分支）
+- 工作区状态：仅 docs/production/audit-evidence/ 与本文档更新，无产品代码改动
+
+### 风险豁免与后续计划
+
+- **风险豁免**：G1 真实 RTSP 100 轮（环境无真实断流源）、G6 端到端恢复、G5 100x RTMP、长稳 2–4h
+  均为「风险豁免后的待补门禁」，不得伪造为已通过。
+- **B 路 RTMP 降级**：A/B 同推流服务器（hangzhouwanpush.hifleet.com:1935），A 稳定 0 重连；
+  B 路 RTSP 输入不稳（最近输入 6ms~2698ms 抖动，疑似 B 路摄像机 channel 301），触发 muxer-only
+  重连后 PTS/DTS 自循环。**不构成回滚条件**（双路均有视频、无重启循环、零 VPU 错误、远好于旧版零输出）。
+  建议后续：修复重连 PTS/DTS 重置逻辑；核查 B 路摄像机/网络；补 G5/G7。
+- 不得在本次发布后顺手修改产品代码并现场编译覆盖；后续修复须走审查→构建→正式 Release→激活流程。
+
+### 证据文件
+
+位于 `docs/production/audit-evidence/`：baseline-*.log、prebuild-tests-*.log、ctest-full-*.log、
+build-release-*.log、activate-*.log、observation-loop.log、observe_loop.sh。
