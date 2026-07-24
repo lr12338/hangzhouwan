@@ -307,3 +307,33 @@ RTMP connected=true，输出帧持续增长（1412->1509+）。重连速率线�
 - 修复提交：`9d449ab`（仅 src/include/tests，无产品代码外改动）
 - 审计文档提交：见下方 SHA
 - 推送：origin/feat/bm1684-edge-deployment
+
+---
+
+## 长期稳定优化部署记录 (2026-07-24 下午)
+
+### 三项优化
+
+**1. 开机自启（立即）**
+- `sudo systemctl enable hangzhouwan.target` -> enabled
+- 链路：multi-user.target -> hangzhouwan.target ->(Requires) business + video
+- 断电重启后服务自动拉起，无需人工干预。
+
+**2. journald 大小上限（立即）**
+- `/etc/systemd/journald.conf`：SystemMaxUse=200M + SystemMaxFileSize=50M + MaxRetentionSec=7day
+- 原配置：空段全默认（无上限）。journal 已 56M，根分区仅 1.1G 可用。
+- 重启 systemd-journald 生效，服务未受影响。配置持久化。
+
+**3. RTMP 重连日志降频（短期，代码 c008eac）**
+- 新增 `should_log_rtmp_reconnect(count, interval)` 纯逻辑节流函数。
+- reconnect_rtmp() 每循环入口决策一次，首次及每 10 次输出 1 条，其余静默。
+- 失败(open_rtmp_muxer)与致命始终输出，不受节流。
+- test_rtmp_reconnect_decision.cpp 新增节流测试（1000 次 -> 100 条日志）。
+- Release：log-throttle-20260724-c008eac，verify 8/8，激活成功。
+
+### 验证结果
+
+- 日志速率：166 行/分钟 -> 72 行/分钟（RTMP 重连 118 -> 24，-80%）
+- ctest 16/16，pytest 159 passed
+- 激活后 VPU 0 错误，NRestarts=0，服务 active
+- current -> log-throttle-20260724-c008eac，previous -> vpu-rtmp-pts-fix-20260724-9d449ab
