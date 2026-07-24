@@ -25,7 +25,8 @@ namespace hzw {
 
 // 输出 PTS 序列：按输出帧序严格递增分配 PTS，忽略源 PTS。
 // 保证输出时间戳单调（源 PTS 回退/RTSP 重连跳变不影响输出），可独立单元测试。
-// reset() 用于 RTMP 新会话重置（重连后从 0 重新开始，避免 non-monotonous DTS）。
+// reset() 仅在「编码器同时重建」的重连路径合法（编码器 DTS 归零时 PTS 才可归零）。
+// muxer-only 重连（编码器不重建）禁止调用 reset()，否则 PTS 归零 < 续接 DTS 致 FLV 永久写帧失败。
 struct OutputPtsSequence {
   int64_t next() { return seq_++; }
   int64_t current() const { return seq_; }

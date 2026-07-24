@@ -337,11 +337,11 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
       teardown_muxer();  // 清理半开 muxer，继续退避
       continue;
     }
-    // 重连成功：重置退避，重置 PTS（新会话从 0 开始，避免 non-monotonous DTS）
+    // 重连成功：重置退避。muxer-only 重连不重建编码器，编码器 DTS 续接，
+    // 故 PTS 必须续接（不可 reset），否则 PTS 归零 < DTS 致 FLV 写帧永久失败。
     rtmp_backoff_.on_success();
     ++rtmp_reconnect_count_;
-    pts_.reset();
-    std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS已重置，编码器未重建）\n",
+    std::fprintf(stdout, "信息 | RTMP重连 | 重连成功（第%d次，PTS续接，编码器未重建）\n",
                  rtmp_reconnect_count_);
     std::fflush(stdout);
     return true;
@@ -410,7 +410,7 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
   if (sink_type_ == "rtmp" && !write_err.empty()) {
     std::fprintf(stdout, "信息 | RTMP重连 | 写入失败：%s，进入重连流程\n", write_err.c_str());
     std::fflush(stdout);
-    // 回退已分配的 PTS（重连后会 reset 到 0）
+    // 重连后 PTS 续接（muxer-only 不重置），重新写入当前帧
     if (!reconnect_rtmp(err)) return false;
     // 重连成功后重新写入当前帧
     vf.frame->pts = pts_.next();
