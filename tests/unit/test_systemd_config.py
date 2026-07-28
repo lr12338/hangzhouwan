@@ -149,6 +149,13 @@ class SupervisorServiceTest(unittest.TestCase):
         self.assertIn("Group=hangzhouwan", self.content)
         self.assertIn("CapabilityBoundingSet=", self.content)
 
+    def test_loads_business_and_video_environment(self):
+        """上游可达性检查必须能解析 A/B 输入及输出地址。"""
+        self.assertIn(
+            "EnvironmentFile=/etc/hangzhouwan/business.env", self.content)
+        self.assertIn(
+            "EnvironmentFile=/etc/hangzhouwan/video.env", self.content)
+
 
 class MaintenanceRestartTest(unittest.TestCase):
     def setUp(self):
