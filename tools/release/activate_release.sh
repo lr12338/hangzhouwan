@@ -362,7 +362,10 @@ PID_EXE_OK=false
 while IFS= read -r pid; do
   [ -z "$pid" ] && continue
   PID_FOUND=true
-  EXE_PATH="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+  # Video 以独立生产账户运行；普通维护用户在 hidepid/Yama 等加固下
+  # 无权解析 /proc/<pid>/exe。这里只提升只读核验动作，避免权限拒绝
+  # 被误判为“进程不来自候选 Release”。
+  EXE_PATH="$(sudo readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
   if [ -n "$EXE_PATH" ]; then
     case "$EXE_PATH" in
       "$CURRENT_REAL"/*)

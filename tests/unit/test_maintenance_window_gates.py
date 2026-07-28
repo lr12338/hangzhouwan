@@ -392,6 +392,11 @@ class ActivateReleaseStructureTest(unittest.TestCase):
         self.assertIn("/proc/$pid/exe", self.src)
         self.assertIn("PID_EXE_OK", self.src)
 
+    def test_pid_verification_supports_separate_service_account(self):
+        """维护用户可只读核验独立 Video 账户的进程映像。"""
+        self.assertIn(
+            'sudo readlink -f "/proc/$pid/exe"', self.src)
+
     def test_rollback_verifies_pointing(self):
         """自动回滚必须验证 current/previous 指向。"""
         self.assertIn("cur_now", self.src)
