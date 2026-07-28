@@ -55,15 +55,8 @@ if sha256sum -c sha256sum.txt --quiet 2>/dev/null; then
   echo "  ✅ 所有文件 SHA256 校验通过"
   PASS=$((PASS + 1))
 else
-  echo "  ⚠️  SHA256 校验有差异（可能 venv 符号链接变化）"
-  # 重新校验排除 venv
-  if grep -v './venv/' sha256sum.txt | sha256sum -c --quiet 2>/dev/null; then
-    echo "  ✅ 非 venv 文件 SHA256 校验通过"
-    PASS=$((PASS + 1))
-  else
-    echo "  ❌ SHA256 校验失败"
-    FAIL=$((FAIL + 1))
-  fi
+  echo "  ❌ SHA256 校验失败（包括自包含 venv）"
+  FAIL=$((FAIL + 1))
 fi
 
 # 5. 关键文件存在
@@ -83,6 +76,29 @@ if [ -x "$RELEASE_DIR/bin/dual_stream_app" ]; then
   PASS=$((PASS + 1))
 else
   echo "  ❌ dual_stream_app 不可执行"
+  FAIL=$((FAIL + 1))
+fi
+
+# 7. 不可变权限与 Python 运行时独立性
+if [ "$(stat -c '%U:%G' "$RELEASE_DIR")" = "root:root" ] &&
+   [ ! -w "$RELEASE_DIR" ] &&
+   ! find "$RELEASE_DIR" \( ! -user root -o ! -group root \) -print -quit |
+     grep -q . &&
+   ! find "$RELEASE_DIR" \( -type f -o -type d \) -perm /022 \
+     -print -quit | grep -q .; then
+  echo "  ✅ Release root:root 且服务只读"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ Release 权限不符合 root:root 只读"
+  FAIL=$((FAIL + 1))
+fi
+if (cd "$RELEASE_DIR" &&
+    PYTHONNOUSERSITE=1 "$RELEASE_DIR/venv/bin/python3" -c \
+      "import sys,yaml,numpy,scipy,sklearn,joblib,pyais,paho.mqtt.client; assert not any(p.startswith('/home/') for p in sys.path)") 2>/dev/null; then
+  echo "  ✅ Python 自包含且不引用 /home"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ Python 运行时仍有外部依赖"
   FAIL=$((FAIL + 1))
 fi
 

@@ -74,7 +74,8 @@ void SophonVideoSink::sleep_interruptible(int64_t ms) {
 bool SophonVideoSink::open(const std::string& path, int width, int height, int fps,
                            int bitrate_kbps, int gop, int device,
                            const std::string& encoder_name,
-                           const std::string& sink_type, std::string& err) {
+                           const std::string& sink_type, bool input_is_dma,
+                           AVPixelFormat input_format, std::string& err) {
   sink_type_ = sink_type;
   // 保存重连所需参数
   output_url_ = path;
@@ -85,8 +86,11 @@ bool SophonVideoSink::open(const std::string& path, int width, int height, int f
   saved_gop_ = gop;
   saved_device_ = device;
   saved_encoder_name_ = encoder_name;
+  saved_input_is_dma_ = input_is_dma;
+  saved_input_format_ = input_format;
 
-  if (!open_encoder(width, height, fps, bitrate_kbps, gop, device, encoder_name, err)) {
+  if (!open_encoder(width, height, fps, bitrate_kbps, gop, device,
+                    encoder_name, input_is_dma, input_format, err)) {
     return false;
   }
   pkt_ = av_packet_alloc();
@@ -111,7 +115,10 @@ bool SophonVideoSink::open(const std::string& path, int width, int height, int f
 
 bool SophonVideoSink::open_encoder(int width, int height, int fps, int bitrate_kbps,
                                    int gop, int device,
-                                   const std::string& encoder_name, std::string& err) {
+                                   const std::string& encoder_name,
+                                   bool input_is_dma,
+                                   AVPixelFormat input_format,
+                                   std::string& err) {
   const AVCodec* enc = avcodec_find_encoder_by_name(encoder_name.c_str());
   if (!enc) {
     err = "找不到编码器: " + encoder_name;
@@ -126,12 +133,20 @@ bool SophonVideoSink::open_encoder(int width, int height, int fps, int bitrate_k
   enc_->height = height;
   enc_->time_base = (AVRational){1, fps};
   enc_->framerate = (AVRational){fps, 1};
-  enc_->pix_fmt = AV_PIX_FMT_NV12;
+  enc_->pix_fmt = input_format;
   enc_->bit_rate = static_cast<int64_t>(bitrate_kbps) * 1000;
   enc_->gop_size = gop;
   enc_->max_b_frames = 0;  // 低延迟 IPPP
   av_opt_set_int(enc_, "sophon_idx", device, 0);
-  // 输入为解码帧 bm_image（DMA 缓冲），is_dma_buffer 保持默认 1。
+  // is_dma_buffer 是 h264_bm 私有 AVOption，必须设置在 priv_data；
+  // 设置在 AVCodecContext 本体会静默找不到选项并保留默认值 1。
+  int option_result = av_opt_set_int(
+      enc_->priv_data, "is_dma_buffer", input_is_dma ? 1 : 0, 0);
+  if (option_result < 0) {
+    avcodec_free_context(&enc_);
+    err = "设置 h264_bm is_dma_buffer 失败";
+    return false;
+  }
   int r = avcodec_open2(enc_, enc, nullptr);
   if (r < 0) {
     char eb[AV_ERROR_MAX_STRING_SIZE];

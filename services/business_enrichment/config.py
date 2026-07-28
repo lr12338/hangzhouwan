@@ -33,6 +33,9 @@ DEFAULTS = {
     "mqtt_topics": "upAIS/base_2250,upAIS/base_2251",
     "mqtt_keepalive": 60,
     "mqtt_reconnect_sec": 5,
+    "mqtt_event_topic": "",
+    "mqtt_offline_max_records": 1000,
+    "mqtt_offline_max_bytes": 10 * 1024 * 1024,
     "stream_a_ais_max_distance_m": 500,
     "stream_b_ais_max_distance_m": 500,
     "request_timeout_ms": 30,
@@ -172,6 +175,15 @@ class BusinessConfig:
             self._data["mqtt_reconnect_sec"] = mqtt["reconnect_sec"]
         if mqtt.get("topics"):
             self._data["mqtt_topics"] = ",".join(mqtt["topics"])
+        device_id = os.environ.get("HZW_DEVICE_ID", os.uname().nodename)
+        topic_template = mqtt.get(
+            "event_topic", "hangzhouwan/{device_id}/events")
+        self._data["mqtt_event_topic"] = topic_template.format(
+            device_id=device_id)
+        self._data["mqtt_offline_max_records"] = int(
+            mqtt.get("offline_max_records", 1000))
+        self._data["mqtt_offline_max_bytes"] = int(
+            mqtt.get("offline_max_mb", 10)) * 1024 * 1024
         # Resolve sensitive fields via env var names declared in YAML
         # (same mechanism as C++ ApplicationConfig::resolve_env).
         for cfg_key, yaml_key in (

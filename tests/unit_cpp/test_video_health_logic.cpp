@@ -74,9 +74,9 @@ int main() {
   // ---- 7) 重连风暴 -> DEGRADED（>阈值触发，==阈值不触发）----
   {
     StreamHealthInput s = connected;
-    s.reconnect_delta = 5;
+    s.reconnects_1h = 5;
     CHECK(compute_stream_level(s, t) == StreamHealthLevel::DEGRADED);
-    s.reconnect_delta = 3;
+    s.reconnects_1h = 2;
     CHECK(compute_stream_level(s, t) == StreamHealthLevel::HEALTHY);
   }
 
@@ -166,6 +166,22 @@ int main() {
                                  true, false, true);
     CHECK(r.status == "FAILED");
     CHECK(r.status != "HEALTHY");
+  }
+
+  // ---- 18) A/B 业务聚合：无目标帧 PENDING 不等于 Sidecar 故障 ----
+  {
+    auto b = compute_business_health(true, true, "PENDING",
+                                     true, true, "PENDING");
+    CHECK(b.link == "HEALTHY");
+    CHECK(b.mode == "PENDING");
+    CHECK(b.link_healthy);
+    b = compute_business_health(true, true, "PENDING",
+                                true, true, "COORD_ONLY");
+    CHECK(b.mode == "COORD_ONLY");
+    b = compute_business_health(true, true, "FULL",
+                                true, false, "DETECTION_ONLY");
+    CHECK(b.link == "FAILED");
+    CHECK(!b.link_healthy);
   }
 
   if (g_failures == 0) std::cout << "通过 | 视频健康判定单元测试全部通过\n";

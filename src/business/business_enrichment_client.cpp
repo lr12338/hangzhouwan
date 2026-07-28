@@ -100,6 +100,7 @@ BusinessEnrichmentClient::~BusinessEnrichmentClient() {
 
 bool BusinessEnrichmentClient::connect(const std::string& socket_path) {
   socket_path_ = socket_path;
+  link_healthy_ = false;
   if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
   fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd_ < 0) return false;
@@ -143,8 +144,10 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
   if (fd_ < 0) {
     // 尝试重连
     if (!connect(socket_path_)) {
-      if (state_ != EnrichmentState::DETECTION_ONLY) {
-        state_ = EnrichmentState::DETECTION_ONLY;
+      link_healthy_ = false;
+      ++error_count_;
+      if (state_.load() != EnrichmentState::DETECTION_ONLY) {
+        state_.store(EnrichmentState::DETECTION_ONLY);
         ++degrade_count_;
       }
       return false;
@@ -175,10 +178,12 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
 
   // 发送
   ssize_t sent = ::send(fd_, req.data(), req.size(), MSG_NOSIGNAL);
-  if (sent < 0) {
+  if (sent < 0 || static_cast<size_t>(sent) != req.size()) {
     ::close(fd_); fd_ = -1;
-    if (state_ != EnrichmentState::DETECTION_ONLY) {
-      state_ = EnrichmentState::DETECTION_ONLY;
+    link_healthy_ = false;
+    ++error_count_;
+    if (state_.load() != EnrichmentState::DETECTION_ONLY) {
+      state_.store(EnrichmentState::DETECTION_ONLY);
       ++degrade_count_;
     }
     return false;
@@ -191,9 +196,16 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
     ssize_t n = ::recv(fd_, buf, sizeof(buf), 0);
     if (n <= 0) {
       if (n == 0 || errno != EINTR) {
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                      errno == ETIMEDOUT)) {
+          ++timeout_count_;
+        } else {
+          ++error_count_;
+        }
         ::close(fd_); fd_ = -1;
-        if (state_ != EnrichmentState::DETECTION_ONLY) {
-          state_ = EnrichmentState::DETECTION_ONLY;
+        link_healthy_ = false;
+        if (state_.load() != EnrichmentState::DETECTION_ONLY) {
+          state_.store(EnrichmentState::DETECTION_ONLY);
           ++degrade_count_;
         }
         return false;
@@ -205,6 +217,7 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
   }
 
   // 解析结果
+  link_healthy_ = true;
   auto parts = split_results(resp);
   bool any_coord = false;
   bool any_match = false;
@@ -236,17 +249,22 @@ bool BusinessEnrichmentClient::enrich(const std::string& stream_id,
   }
 
   // 更新状态
-  // 空结果（本帧无检测框）：Sidecar 正常响应，保持当前状态，
-  // 不误判为 DETECTION_ONLY（避免健康状态在无船帧时闪烁）。
+  // 空结果（本帧无检测框）：链路已由成功响应证明健康，但本帧没有
+  // 可判断的增强结果，明确标记 PENDING，不能误判 Sidecar 故障。
   if (results.empty()) {
+    state_.store(EnrichmentState::PENDING);
     return true;
   }
   EnrichmentState new_state = EnrichmentState::DETECTION_ONLY;
   if (any_match) new_state = EnrichmentState::FULL;
   else if (any_coord) new_state = EnrichmentState::COORD_ONLY;
-  if (new_state != state_) {
-    if (state_ == EnrichmentState::DETECTION_ONLY) ++recover_count_;
-    state_ = new_state;
+  const EnrichmentState previous_state = state_.load();
+  if (new_state != previous_state) {
+    if (previous_state == EnrichmentState::DETECTION_ONLY ||
+        previous_state == EnrichmentState::PENDING) {
+      ++recover_count_;
+    }
+    state_.store(new_state);
   }
   return true;
 }

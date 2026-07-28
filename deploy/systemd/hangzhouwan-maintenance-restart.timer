@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Hangzhou Bay Controlled Maintenance Restart
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+AccuracySec=1min
+Unit=hangzhouwan-maintenance-restart.service
+
+[Install]
+WantedBy=timers.target

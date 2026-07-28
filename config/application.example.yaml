@@ -26,9 +26,9 @@ streams:
     coordinate_model: ""          # 0121_random_forest_model.pkl 路径，由部署注入
     inference_fps: 5
     output_fps: 10
-    output_width: 960
-    output_height: 540
-    output_bitrate_kbps: 800
+    output_width: 1280
+    output_height: 720
+    output_bitrate_kbps: 1200
     forbidden_rectangles: []      # [[x1, y1, x2, y2], ...]
     forbidden_polygons: []        # [[[x, y], ...], ...]
 
@@ -39,9 +39,9 @@ streams:
     coordinate_model: ""          # beishang_x-l.pkl 路径，由部署注入
     inference_fps: 5
     output_fps: 10
-    output_width: 960
-    output_height: 540
-    output_bitrate_kbps: 800
+    output_width: 1280
+    output_height: 720
+    output_bitrate_kbps: 1200
     forbidden_rectangles: []
     forbidden_polygons: []
 
@@ -102,13 +102,37 @@ mqtt:
   topics: ["upAIS/#"]  # 通配符订阅所有 AIS 基站（base_2250/2251 已离线）
   keepalive: 60
   reconnect_sec: 5
+  qos: 1
+  state_topic: "hangzhouwan/{device_id}/state"
+  event_topic: "hangzhouwan/{device_id}/events"
+  offline_max_mb: 10
+  offline_max_records: 1000
 
 health:
   check_interval_seconds: 10
   stream_healthy_fps: 7
   stream_degraded_fps: 5
-  stream_failed_fps_threshold: 5
-  reconnect_alert_per_hour: 2
+  inference_healthy_fps: 4
+  frame_stale_seconds: 15
+  stream_failed_seconds: 60
+  reconnects_per_hour: 2
+
+event_writer:
+  directory: /data/hangzhouwan/events
+  rotate_size_mb: 50
+  rotate_seconds: 3600
+  retention_days: 7
+  sync_seconds: 5
+  queue_max_mb: 4
+  disk_warn_mb: 2048
+  disk_stop_mb: 1024
+
+supervisor:
+  interval_seconds: 30
+  failed_confirmations: 3
+  socket_failure_seconds: 90
+  cooldown_seconds: 1800
+  daily_recovery_limit: 2
 
 logging:
   video_log_max_size_mb: 50

@@ -22,6 +22,7 @@
 #include <string>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace hzw {
 
@@ -36,8 +37,26 @@ struct StreamHealthSnapshot {
   int64_t last_frame_time_ms = 0;     // 墙钟时间
   int64_t rtsp_reconnects = 0;
   int64_t rtmp_reconnects = 0;
+  int64_t reconnects_1h = 0;
   int queue_length = 0;
   double e2e_p95_ms = 0.0;
+};
+
+struct EventWriterHealthSnapshot {
+  bool running = false;
+  bool write_enabled = false;
+  bool low_space_warning = false;
+  int64_t queued_bytes = 0;
+  int64_t written_records = 0;
+  int64_t dropped_records = 0;
+  std::string last_error;
+};
+
+struct StorageHealthSnapshot {
+  std::string path = "/data";
+  bool available = false;
+  int64_t free_bytes = 0;
+  std::string state = "UNKNOWN";  // OK | WARNING | PROTECTED | UNAVAILABLE
 };
 
 // 整体健康状态（由外部定期更新）
@@ -47,10 +66,19 @@ struct VideoHealthState {
   std::string commit;
   std::string status = "UNKNOWN";       // HEALTHY | DEGRADED | FAILED
   std::string business_state = "UNKNOWN"; // FULL | COORD_ONLY | DETECTION_ONLY
+  std::string business_link = "UNKNOWN";  // HEALTHY | FAILED | DISABLED
+  std::string enrichment_mode = "PENDING"; // PENDING | FULL | COORD_ONLY | DETECTION_ONLY
+  int64_t business_timeout_count = 0;
+  int64_t business_error_count = 0;
   std::string degradation = "none";     // none | stream_degraded | stream_down | detection_only | resource_fatal
   std::string health_reason;            // 降级/失败原因（人类可读）
   StreamHealthSnapshot stream_a;
   StreamHealthSnapshot stream_b;
+  StorageHealthSnapshot storage;
+  EventWriterHealthSnapshot event_writer_a;
+  EventWriterHealthSnapshot event_writer_b;
+  bool resource_fatal = false;
+  std::vector<std::string> active_alerts;
   double rss_mb = 0.0;
   std::string tpu_info = "unknown";
   int64_t uptime_seconds = 0;

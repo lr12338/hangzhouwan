@@ -170,6 +170,45 @@ int main() {
     check(proc.draw_rectangles(&frame, empty, err), "空检测列表不崩溃");
   }
 
+  // === 测试 6：BMCV NV12 输出缩放 ===
+  printf("== 测试 6: NV12 输出缩放 ==\n");
+  {
+    hzw::BmcvProcessor proc;
+    std::string err;
+    check(proc.init(handle, SW, SH, err), "init 成功");
+    SynthFrame sf(SW, SH);
+    AVFrame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.data[0] = sf.y.data();
+    frame.data[1] = sf.uv.data();
+    frame.linesize[0] = SW;
+    frame.linesize[1] = SW;
+    frame.width = SW;
+    frame.height = SH;
+    AVFrame* scaled = nullptr;
+    std::vector<hzw::BmcvProcessor::ColoredRect> overlays;
+    hzw::BmcvProcessor::ColoredRect overlay;
+    overlay.x1 = 100; overlay.y1 = 100; overlay.x2 = 300; overlay.y2 = 300;
+    overlay.r = 0; overlay.g = 255; overlay.b = 0; overlay.label = "ship 0.95";
+    overlays.push_back(overlay);
+    check(proc.resize_yuv420p(&frame, 1280, 720, &scaled, err, &overlays),
+          "resize_yuv420p 1280x720 成功");
+    check(scaled != nullptr, "缩放输出 AVFrame 非空");
+    if (scaled) {
+      check(scaled->width == 1280 && scaled->height == 720,
+            "缩放输出尺寸为 1280x720");
+      check(scaled->format == AV_PIX_FMT_YUV420P,
+            "缩放输出格式为 YUV420P");
+      check(scaled->data[4] != nullptr && scaled->data[5] != nullptr &&
+                scaled->data[6] != nullptr,
+            "缩放输出携带三个 DMA 设备平面");
+      check(scaled->buf[0] != nullptr && scaled->buf[1] != nullptr &&
+                scaled->buf[2] != nullptr,
+            "缩放输出具有完整引用计数生命周期");
+      av_frame_free(&scaled);
+    }
+  }
+
   bm_dev_free(handle);
   printf("\n===== BMCV 测试: %d 失败 =====\n", failures);
   return failures > 0 ? 1 : 0;

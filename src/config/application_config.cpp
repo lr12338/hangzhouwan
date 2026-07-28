@@ -324,6 +324,8 @@ void parse_stream(const YamlValue& sv, StreamConfig& sc) {
   sc.coordinate_model_path = sv.get_str("coordinate_model", sc.coordinate_model_path);
   sc.output_fps = sv.get_int("output_fps", sc.output_fps);
   sc.inference_fps = sv.get_int("inference_fps", sc.inference_fps);
+  sc.output_width = sv.get_int("output_width", sc.output_width);
+  sc.output_height = sv.get_int("output_height", sc.output_height);
   sc.bitrate_kbps = sv.get_int("output_bitrate_kbps", sv.get_int("bitrate_kbps", sc.bitrate_kbps));
   sc.gop = sv.get_int("gop", sc.gop);
   sc.jitter_buffer_size = sv.get_int("jitter_buffer_size", sc.jitter_buffer_size);
@@ -455,6 +457,10 @@ bool ApplicationConfig::from_yaml(const YamlValue& root, std::string& err) {
     health_check_interval_seconds = hlth->get_int("check_interval_seconds", health_check_interval_seconds);
     stream_healthy_fps = hlth->get_int("stream_healthy_fps", stream_healthy_fps);
     stream_degraded_fps = hlth->get_int("stream_degraded_fps", stream_degraded_fps);
+    inference_healthy_fps = hlth->get_int("inference_healthy_fps", inference_healthy_fps);
+    frame_stale_seconds = hlth->get_int("frame_stale_seconds", frame_stale_seconds);
+    stream_failed_seconds = hlth->get_int("stream_failed_seconds", stream_failed_seconds);
+    reconnects_per_hour = hlth->get_int("reconnects_per_hour", reconnects_per_hour);
   }
   // logging
   const YamlValue* log = root.find("logging");
@@ -467,6 +473,17 @@ bool ApplicationConfig::from_yaml(const YamlValue& root, std::string& err) {
     jsonl_max_files = log->get_int("jsonl_max_files", jsonl_max_files);
     disk_threshold_mb = log->get_int("disk_threshold_mb", disk_threshold_mb);
   }
+  const YamlValue* events = root.find("event_writer");
+  if (events && events->is_map()) {
+    event_directory = events->get_str("directory", event_directory);
+    event_rotate_size_mb = events->get_int("rotate_size_mb", event_rotate_size_mb);
+    event_rotate_seconds = events->get_int("rotate_seconds", event_rotate_seconds);
+    event_retention_days = events->get_int("retention_days", event_retention_days);
+    event_sync_seconds = events->get_int("sync_seconds", event_sync_seconds);
+    event_queue_max_mb = events->get_int("queue_max_mb", event_queue_max_mb);
+    event_disk_warn_mb = events->get_int("disk_warn_mb", event_disk_warn_mb);
+    event_disk_stop_mb = events->get_int("disk_stop_mb", event_disk_stop_mb);
+  }
   // streams
   const YamlValue* streams_v = root.find("streams");
   if (streams_v && streams_v->is_list()) {
@@ -477,7 +494,7 @@ bool ApplicationConfig::from_yaml(const YamlValue& root, std::string& err) {
         // 流级 conf/iou 默认继承全局 inference 配置
         sc.conf = conf;
         sc.iou = iou;
-        sc.bitrate_kbps = 800;
+        sc.bitrate_kbps = 1200;
         sc.gop = 20;
         sc.jitter_buffer_size = 5;
         parse_stream(sv, sc);
@@ -530,9 +547,20 @@ bool ApplicationConfig::validate(std::string& err) const {
       err = "stream " + s.id + " inference_fps 大于 output_fps";
       return false;
     }
+    if (s.output_width < 320 || s.output_height < 240 ||
+        (s.output_width % 2) != 0 || (s.output_height % 2) != 0) {
+      err = "stream " + s.id + " 输出分辨率必须为不小于320x240的偶数";
+      return false;
+    }
     if (s.bitrate_kbps <= 0) { err = "stream " + s.id + " bitrate_kbps 非法"; return false; }
     if (s.gop <= 0) { err = "stream " + s.id + " gop 非法"; return false; }
     if (prod) {
+      if (s.output_width != 1280 || s.output_height != 720 ||
+          s.output_fps != 10 || s.bitrate_kbps != 1200 || s.gop != 20) {
+        err = "production stream " + s.id +
+              " 输出必须为1280x720@10fps/1200kbps/GOP20";
+        return false;
+      }
       if (coordinate_mode == "sklearn" || coordinate_mode == "numpy") {
         if (s.coordinate_model_path.empty()) {
           err = "production stream " + s.id + " coordinate_model 未配置";
@@ -545,6 +573,24 @@ bool ApplicationConfig::validate(std::string& err) const {
   // production 必须有 business socket
   if (prod && business_socket.empty()) {
     err = "production business_socket 未配置";
+    return false;
+  }
+  if (event_directory.compare(0, 6, "/data/") != 0) {
+    err = "event_writer.directory 必须位于 /data，禁止回退根分区";
+    return false;
+  }
+  if (event_rotate_size_mb < 1 || event_rotate_seconds < 1 ||
+      event_retention_days < 1 || event_sync_seconds < 1 ||
+      event_queue_max_mb < 1 || event_disk_stop_mb < 1 ||
+      event_disk_warn_mb <= event_disk_stop_mb) {
+    err = "event_writer 参数非法";
+    return false;
+  }
+  if (stream_healthy_fps < 1 || inference_healthy_fps < 1 ||
+      frame_stale_seconds < 1 ||
+      stream_failed_seconds <= frame_stale_seconds ||
+      reconnects_per_hour < 0) {
+    err = "health 阈值非法";
     return false;
   }
 

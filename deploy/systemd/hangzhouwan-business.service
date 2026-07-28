@@ -3,26 +3,47 @@ Description=Hangzhou Bay Business Enrichment Service (Sidecar)
 After=network-online.target
 Wants=network-online.target
 PartOf=hangzhouwan.target
-StartLimitIntervalSec=120
+StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=linaro
-Group=linaro
+User=hangzhouwan-business
+Group=hangzhouwan
 WorkingDirectory=/opt/hangzhouwan/current
 EnvironmentFile=/etc/hangzhouwan/business.env
 ExecStart=/opt/hangzhouwan/current/venv/bin/python3 \
   -m services.business_enrichment.app \
   --config /etc/hangzhouwan/application.yaml
 Restart=on-failure
-RestartSec=5
+RestartSec=15
 LimitNOFILE=4096
+LimitCORE=0
 KillSignal=SIGTERM
 TimeoutStartSec=30
-TimeoutStopSec=15
-StateDirectory=hangzhouwan
-LogsDirectory=hangzhouwan
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/run/hangzhouwan /data/hangzhouwan/monitor
+TasksMax=128
+MemoryHigh=384M
+MemoryMax=512M
+OOMScoreAdjust=-250
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+SyslogIdentifier=hangzhouwan-business
 StandardOutput=journal
 StandardError=journal
 

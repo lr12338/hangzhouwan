@@ -31,7 +31,9 @@ streams:
     coordinate_model: "/opt/models/a.pkl"
     output_fps: 10
     inference_fps: 5
-    output_bitrate_kbps: 800
+    output_width: 1280
+    output_height: 720
+    output_bitrate_kbps: 1200
     gop: 20
     jitter_buffer_size: 5
     forbidden_rectangles: [[1480, 0, 2560, 630], [247, 855, 275, 888]]
@@ -205,6 +207,35 @@ business:
   CHECK(err.find("coordinate_model") != std::string::npos);
 }
 
+static void test_production_rejects_old_output_spec() {
+  const char* yaml = R"(
+application:
+  environment: production
+inference:
+  model_path: "/opt/m.bmodel"
+streams:
+  - id: A
+    enabled: true
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    coordinate_model: "/opt/a.pkl"
+    output_width: 960
+    output_height: 540
+    output_fps: 10
+    inference_fps: 5
+    output_bitrate_kbps: 800
+business:
+  coordinate_mode: sklearn
+)";
+  YamlValue root;
+  std::string err;
+  parse_yaml(yaml, root, err);
+  ApplicationConfig cfg;
+  bool ok = cfg.from_yaml(root, err);
+  CHECK(!ok);
+  CHECK(err.find("1280x720") != std::string::npos);
+}
+
 static void test_extra_frame_buffer_num() {
   // 配置化：runtime.extra_frame_buffer_num 覆盖默认值。
   const char* yaml = R"(
@@ -259,6 +290,7 @@ int main() {
   test_config_load();
   test_production_rejects_mock();
   test_production_missing_model();
+  test_production_rejects_old_output_spec();
   test_extra_frame_buffer_num();
   if (failures == 0) {
     std::printf("OK application_config: all tests passed\n");

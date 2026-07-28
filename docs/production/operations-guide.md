@@ -1,7 +1,7 @@
 # 杭州湾双路检测系统 · 生产运维手册
 
 > 本文档为 BM1684 板端生产部署的主要操作参考，可直接复制执行。
-> 适用版本：阶段7 Release（`202607221953-3dfcf4e`，含热修补丁）。
+> 适用版本：2026-07 单机工业生产加固 Release。
 > **当前状态：已替代 Windows 旧服务，双路推流正式地址，生产运行中。**
 
 ---
@@ -11,7 +11,11 @@
 ```
 hangzhouwan.target
 ├── hangzhouwan-business.service   (业务增强 Sidecar)
-└── hangzhouwan-video.service      (双路视频管线)
+├── hangzhouwan-video.service      (双路视频管线)
+└── hangzhouwan-supervisor.service (30 秒健康监督与有限恢复)
+
+hangzhouwan-maintenance-restart.timer
+└── 每天 03:30 顺序重启 Business 和 Video，并执行就绪检查
 ```
 
 - **Business**：Python sidecar，负责坐标预测（sklearn）、MQTT AIS 订阅/缓存、视觉-AIS 匹配、JSONL 事件输出。
@@ -25,6 +29,10 @@ hangzhouwan.target
 - Video `After=hangzhouwan-business.service`（保证 Business 先启动）。
 - Video `ExecStartPre=hzwctl wait-business --timeout 30`（等 Business readiness 通过后才启动 Video 主程序）。
 - 共享运行目录 `/run/hangzhouwan` 由 `tmpfiles.d` 统一管理，不随任一服务停止而删除。
+- Video 为 10 分钟最多 3 次、间隔 60 秒；Business 为 5 分钟最多 5 次、
+  间隔 15 秒。限流后由监督器结合上游、磁盘和冷却策略处理。
+- 定时维护使用 `Persistent=true`；补执行时若开机或 Video 运行不足
+  30 分钟会跳过，避免启动后立即二次重启。
 
 ---
 
@@ -60,24 +68,23 @@ hangzhouwan.target
 |---|---|
 | `/opt/hangzhouwan/current` | 当前激活 Release 软链接 |
 | `/opt/hangzhouwan/previous` | 上一版本 Release 软链接（回滚目标） |
-| `/opt/hangzhouwan/releases/<version>-<commit>/` | 不可变 Release 制品目录 |
-| `/etc/hangzhouwan/application.yaml` | 唯一权威配置（权限 640 root:linaro） |
+| `/data/hangzhouwan/releases/<version>-<commit>/` | 不可变 Release 制品目录 |
+| `/etc/hangzhouwan/application.yaml` | 唯一权威配置（权限 640 root:hangzhouwan） |
 | `/etc/hangzhouwan/business.env` | Business 环境变量（MQTT 凭据等，权限 640） |
 | `/etc/hangzhouwan/video.env` | Video 环境变量（RTSP/RTMP URL 等，权限 640） |
 | `/etc/tmpfiles.d/hangzhouwan.conf` | 共享运行目录 tmpfiles.d 配置 |
-| `/etc/systemd/journald.conf.d/size.conf` | journald 日志大小限制（50M） |
+| `/etc/systemd/journald.conf.d/50-hangzhouwan-limits.conf` | journald 总量限制（50M） |
 | `/run/hangzhouwan/business.sock` | Business Sidecar Unix Socket |
 | `/run/hangzhouwan/video-health.sock` | Video 结构化健康接口 Socket |
-| `/var/log/hangzhouwan/` | 日志和诊断包目录 |
-| `/var/lib/hangzhouwan/` | JSONL 事件输出和状态数据目录 |
-| `/home/linaro/hangzhouwan` | 源码仓库（Git 分支 `feat/bm1684-edge-deployment`） |
+| `/data/hangzhouwan/events/` | A/B 事件 JSONL、gzip 轮转和导入归档 |
+| `/data/hangzhouwan/monitor/` | 本地告警、MQTT 离线队列、监督器状态和诊断 |
 
 Release 目录结构：
 ```
-/opt/hangzhouwan/releases/<version>-<commit>/
+/data/hangzhouwan/releases/<version>-<commit>/
 ├── bin/dual_stream_app       # C++ 双路推理主程序
 ├── bin/hzwctl                # 运维工具
-├── venv/                     # Python 虚拟环境（继承系统 site-packages）
+├── venv/                     # 固定版本、自包含且不引用 /home 的 Python 环境
 ├── models/                   # bmodel + 坐标模型
 ├── services/                 # Business sidecar Python 代码
 ├── systemd/                  # systemd 单元文件
@@ -88,7 +95,8 @@ Release 目录结构：
 └── sha256sum.txt             # 完整性校验
 ```
 
-> ⚠️ 当前 Release 含热修补丁（见第 18 节），manifest.json SHA256 已失效。下次正式构建 Release 时需重新生成。
+Release 必须为 `root:root` 且组/其他用户不可写；安装和激活前使用
+`verify_release.sh` 校验完整 SHA256。
 
 ---
 
@@ -105,11 +113,11 @@ sudo systemctl start hangzhouwan.target
 ```bash
 # 1. 先启动 Business
 sudo systemctl start hangzhouwan-business.service
-/opt/hangzhouwan/current/bin/hzwctl wait-business --timeout 30
+sudo /opt/hangzhouwan/current/bin/hzwctl wait-business --timeout 30
 
 # 2. 再启动 Video
 sudo systemctl start hangzhouwan-video.service
-/opt/hangzhouwan/current/bin/hzwctl wait-video --timeout 60
+sudo /opt/hangzhouwan/current/bin/hzwctl wait-health --timeout 180
 ```
 
 - **何时用 target**：常规启动，两个服务都需要运行。
@@ -127,6 +135,37 @@ sudo systemctl stop hangzhouwan.target
 # 单独停止
 sudo systemctl stop hangzhouwan-video.service
 sudo systemctl stop hangzhouwan-business.service
+```
+
+### 5.1 每日维护重启
+
+默认每天北京时间 03:30 执行受控维护，顺序为：
+
+1. 获取维护锁，保存诊断，检查 `/data`、网络和上游端口；
+2. 清除限流后重启 Business，并验证 Sidecar；
+3. 重启 Video，连续三次验证 A/B 真实输出和推理；
+4. 180 秒内未完成则告警退出，不循环重启。
+
+安装并启用：
+
+```bash
+sudo cp deploy/systemd/hangzhouwan-maintenance-restart.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hangzhouwan-maintenance-restart.timer
+systemctl list-timers hangzhouwan-maintenance-restart.timer
+```
+
+修改执行时间后，执行 `sudo systemctl daemon-reload && sudo systemctl restart
+hangzhouwan-maintenance-restart.timer`。临时手动触发可运行：
+
+```bash
+sudo systemctl start hangzhouwan-maintenance-restart.service
+```
+
+关闭定时重启：
+
+```bash
+sudo systemctl disable --now hangzhouwan-maintenance-restart.timer
 ```
 
 检查残留进程：
@@ -181,16 +220,16 @@ sudo systemctl restart hangzhouwan-business.service
 
 ```bash
 # 系统状态汇总（优先读 Video 健康接口）
-/opt/hangzhouwan/current/bin/hzwctl status
+sudo /opt/hangzhouwan/current/bin/hzwctl status
 
 # 健康状态
-/opt/hangzhouwan/current/bin/hzwctl health
+sudo /opt/hangzhouwan/current/bin/hzwctl health --json
 
 # 版本信息
-/opt/hangzhouwan/current/bin/hzwctl version
+sudo /opt/hangzhouwan/current/bin/hzwctl version
 
 # 运行时预检
-/opt/hangzhouwan/current/bin/hzwctl preflight \
+sudo /opt/hangzhouwan/current/bin/hzwctl preflight \
   --release /opt/hangzhouwan/current \
   --config /etc/hangzhouwan/application.yaml \
   --runtime

@@ -31,6 +31,7 @@
 #include "monitoring/pipeline_metrics.h"
 #include "pipeline/detection_snapshot.h"
 #include "pipeline/enriched_snapshot.h"
+#include "pipeline/async_jsonl_writer.h"
 #include "video/latest_frame_queue.h"
 #include "video/bmcv_processor.h"
 #include "video/detection_region_filter.h"
@@ -50,7 +51,9 @@ struct PipelineConfig {
   int source_fps = 20;
   int output_fps = 10;
   int inference_fps = 5;
-  int bitrate_kbps = 800;
+  int output_width = 1280;
+  int output_height = 720;
+  int bitrate_kbps = 1200;
   int gop = 20;
   int extra_frame_buffer_num = 20;  // 解码输出缓冲池大小（>= 编码器保留帧数，防 bm_image 池死锁）
   int queue_size = 1;
@@ -63,7 +66,14 @@ struct PipelineConfig {
   int jitter_buffer_size = 3;  // 抖动缓冲帧数（吸收RTSP突发，0=禁用）
   bool enable_business = false;          // 启用业务增强（坐标+AIS）
   std::string business_socket = "/tmp/hangzhouwan-business.sock";
-  std::string business_jsonl_path;       // 业务JSONL输出路径（空=不输出）
+  std::string event_directory = "/data/hangzhouwan/events";
+  int event_rotate_size_mb = 50;
+  int event_rotate_seconds = 3600;
+  int event_retention_days = 7;
+  int event_sync_seconds = 5;
+  int event_queue_max_mb = 4;
+  int event_disk_warn_mb = 2048;
+  int event_disk_stop_mb = 1024;
   int request_timeout_ms = 200;           // Sidecar 请求超时（毫秒）
   std::string coordinate_mode = "sklearn";  // 坐标模式（JSONL/日志用）
   std::string preprocess = "cpu";   // cpu | bmcv
@@ -120,6 +130,18 @@ class SingleStreamPipeline {
   int business_recover_count() const {
     return business_client_ ? business_client_->recover_count() : 0;
   }
+  bool business_link_healthy() const {
+    return business_client_ ? business_client_->link_healthy() : false;
+  }
+  int64_t business_timeout_count() const {
+    return business_client_ ? business_client_->timeout_count() : 0;
+  }
+  int64_t business_error_count() const {
+    return business_client_ ? business_client_->error_count() : 0;
+  }
+  AsyncJsonlWriterStatus event_writer_status() const {
+    return event_writer_ ? event_writer_->status() : AsyncJsonlWriterStatus{};
+  }
 
  private:
   void capture_loop(const PipelineConfig& cfg);
@@ -138,7 +160,7 @@ class SingleStreamPipeline {
   BmcvProcessor bmcv_;
   DetectionRegionFilter region_filter_;
   std::unique_ptr<BusinessEnrichmentClient> business_client_;
-  FILE* business_jsonl_ = nullptr;
+  std::unique_ptr<AsyncJsonlWriter> event_writer_;
 
   using FrameQueue = LatestFrameQueue<VideoFrame>;
   std::unique_ptr<FrameQueue> q_decode_;   // 解码 -> 处理

@@ -3,6 +3,9 @@
 import threading
 import time
 import re
+import collections
+import json
+import os
 
 from .decoder import PyAisDecoder
 
@@ -21,7 +24,9 @@ class MqttAisSubscriber:
 
     def __init__(self, store, host, port=1883, client_id="", username="",
                  password="", topics=None, keepalive=60, reconnect_sec=5,
-                 enable_capture=False, capture_dir=None):
+                 enable_capture=False, capture_dir=None, event_topic="",
+                 offline_path="/data/hangzhouwan/monitor/business-mqtt-offline.jsonl",
+                 offline_max_records=1000, offline_max_bytes=10 * 1024 * 1024):
         self.store = store
         self.host = host
         self.port = port
@@ -33,6 +38,10 @@ class MqttAisSubscriber:
         self.reconnect_sec = reconnect_sec
         self.enable_capture = enable_capture
         self.capture_dir = capture_dir
+        self.event_topic = event_topic
+        self.offline_path = offline_path
+        self.offline_max_records = offline_max_records
+        self.offline_max_bytes = offline_max_bytes
         self._stop = False
         self.connected = False
         self.reconnect_count = 0
@@ -45,17 +54,26 @@ class MqttAisSubscriber:
         self._topic_counts = {}
         self._fragments = {}  # (seq_id, channel) -> {total, parts, first_ts}
         self._frag_lock = threading.Lock()
+        self._offline = collections.deque()
+        self._offline_bytes = 0
+        self._offline_lock = threading.Lock()
+        self._offline_cv = threading.Condition(self._offline_lock)
+        self._offline_dirty = False
+        self._event_thread = None
+        self._load_offline()
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
             self.connected = True
             self.client = client
             for t in self.topics:
-                client.subscribe(t)
+                client.subscribe(t, qos=1)
+            with self._offline_cv:
+                self._offline_cv.notify()
         else:
             self.connected = False
 
-    def _on_disconnect(self, client, userdata, rc, properties=None):
+    def _on_disconnect(self, client, userdata, flags, rc, properties=None):
         self.connected = False
         if not self._stop:
             self.reconnect_count += 1
@@ -160,6 +178,9 @@ class MqttAisSubscriber:
         except ImportError:
             return
         self._open_capture()
+        self._event_thread = threading.Thread(
+            target=self._event_loop, name="mqtt-event-spool", daemon=True)
+        self._event_thread.start()
         while not self._stop:
             try:
                 client = mqtt.Client(
@@ -177,7 +198,95 @@ class MqttAisSubscriber:
                 if not self._stop:
                     self.reconnect_count += 1
                     time.sleep(self.reconnect_sec)
+        with self._offline_cv:
+            self._offline_cv.notify_all()
+        if self._event_thread:
+            self._event_thread.join(timeout=5)
         self._close_capture()
+
+    def _load_offline(self):
+        try:
+            with open(self.offline_path, encoding="utf-8") as stream:
+                for line in stream:
+                    self._queue_offline(json.loads(line))
+            self._offline_dirty = False
+        except Exception:
+            pass
+
+    def _persist_offline(self):
+        directory = os.path.dirname(self.offline_path)
+        if directory:
+            os.makedirs(directory, mode=0o750, exist_ok=True)
+        temporary = self.offline_path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            for item, _ in self._offline:
+                stream.write(json.dumps(item, ensure_ascii=False,
+                                        separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, self.offline_path)
+        self._offline_dirty = False
+
+    def _queue_offline(self, item):
+        encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+        size = len(encoded.encode("utf-8")) + 1
+        self._offline.append((item, size))
+        self._offline_bytes += size
+        self._offline_dirty = True
+        while (len(self._offline) > self.offline_max_records or
+               self._offline_bytes > self.offline_max_bytes):
+            _, removed = self._offline.popleft()
+            self._offline_bytes -= removed
+
+    def _flush_offline(self):
+        if not self.client or not self.connected:
+            return
+        with self._offline_lock:
+            while self._offline:
+                item, size = self._offline[0]
+                info = self.client.publish(self.event_topic,
+                                           json.dumps(item, ensure_ascii=False,
+                                                      separators=(",", ":")),
+                                           qos=1, retain=False)
+                if info.rc != 0:
+                    break
+                self._offline.popleft()
+                self._offline_bytes -= size
+                self._offline_dirty = True
+            if self._offline_dirty:
+                self._persist_offline()
+
+    def _event_loop(self):
+        while not self._stop:
+            with self._offline_cv:
+                self._offline_cv.wait(timeout=1.0)
+                connected = bool(self.client and self.connected)
+                dirty = self._offline_dirty
+            try:
+                if connected:
+                    self._flush_offline()
+                elif dirty:
+                    with self._offline_lock:
+                        if self._offline_dirty:
+                            self._persist_offline()
+            except Exception:
+                # 磁盘或 MQTT 异常只保留内存有界队列，不影响业务请求线程。
+                pass
+        try:
+            with self._offline_lock:
+                if self._offline_dirty:
+                    self._persist_offline()
+        except Exception:
+            pass
+
+    def publish_event(self, event):
+        """QoS1 非阻塞发布；断线时写入 10MB/1000 条有界队列。"""
+        if not self.event_topic:
+            return False
+        with self._offline_cv:
+            self._queue_offline(event)
+            self._offline_cv.notify()
+        return bool(self.client and self.connected)
 
     def stop(self):
         self._stop = True
@@ -186,14 +295,22 @@ class MqttAisSubscriber:
                 self.client.disconnect()
             except Exception:
                 pass
+        with self._offline_cv:
+            self._offline_cv.notify_all()
         self._close_capture()
 
     def stats(self):
         with self._lock:
-            return {
+            result = {
                 "connected": self.connected,
                 "reconnect_count": self.reconnect_count,
                 "last_message_time": self.last_message_time,
                 "topic_counts": dict(self._topic_counts),
                 "capture_count": self._capture_count,
             }
+        with self._offline_lock:
+            result.update({
+                "offline_queue_records": len(self._offline),
+                "offline_queue_bytes": self._offline_bytes,
+            })
+        return result

@@ -87,7 +87,11 @@ perform_rollback() {
   fi
 
   echo "  回滚到 previous: $prev_target"
-  ln -sfn "$prev_target" "$CURRENT_LINK"
+  if ! sudo ln -sfn "$prev_target" "$CURRENT_LINK"; then
+    echo "  ❌ 无法恢复 current 符号链接"
+    RESULT_CODE=99
+    return
+  fi
   echo "  current -> $prev_target"
 
   # 重启 previous（先 reset-failed 清除 StartLimitBurst）
@@ -105,36 +109,55 @@ perform_rollback() {
   sleep 5
   local rollback_ok=true health_status=""
   if [ -x "${CURRENT_LINK}/bin/hzwctl" ]; then
-    if ! "${CURRENT_LINK}/bin/hzwctl" wait-business --timeout 30 2>/dev/null; then
+    if ! sudo "${CURRENT_LINK}/bin/hzwctl" wait-business --timeout 30 2>/dev/null; then
       echo "  ❌ 回滚后 Business 未就绪"
       rollback_ok=false
     else
       echo "  ✅ 回滚后 Business 就绪"
     fi
     if [ "$rollback_ok" = true ]; then
-      if ! "${CURRENT_LINK}/bin/hzwctl" wait-video --timeout 60 2>/dev/null; then
+      if ! sudo "${CURRENT_LINK}/bin/hzwctl" wait-video --timeout 60 2>/dev/null; then
         echo "  ❌ 回滚后 Video 未就绪"
         rollback_ok=false
       else
         echo "  ✅ 回滚后 Video 就绪"
       fi
     fi
-    # 回滚后执行 health，必须达到规定状态
+    # wait-video 只保证 socket/进程可用，旧 Release 此时可能仍处于 STARTING。
+    # 最多再等待 90 秒进入稳定状态，避免把一次正常冷启动误报为回滚失败。
     if [ "$rollback_ok" = true ]; then
-      local health_output
-      health_output="$("${CURRENT_LINK}/bin/hzwctl" health 2>/dev/null || true)"
-      health_status="$(printf '%s' "$health_output" | python3 -c "
+      local health_output health_deadline
+      health_deadline=$((SECONDS + 90))
+      while [ $SECONDS -lt $health_deadline ]; do
+        # health --json 在 DEGRADED/FAILED 时会以非零码退出，但 JSON 本身仍
+        # 是有效结果；不可用 `cmd || fallback` 拼接两份输出，否则 json.loads
+        # 会因 trailing data 失败并把真实 DEGRADED 误判为空状态。
+        health_output="$(sudo "${CURRENT_LINK}/bin/hzwctl" health --json \
+          2>/dev/null || true)"
+        if [ -z "$health_output" ]; then
+          health_output="$(sudo "${CURRENT_LINK}/bin/hzwctl" health \
+            2>/dev/null || true)"
+        fi
+        health_status="$(printf '%s' "$health_output" | python3 -c "
 import json, sys
 try:
-    d = json.load(sys.stdin)
+    raw = sys.stdin.read()
+    d = json.loads(raw[raw.find('{'):])
     print(d.get('status', ''))
 except Exception:
     print('')
 " 2>/dev/null || echo '')"
-      if [ "$health_status" = "HEALTHY" ] || [ "$health_status" = "DEGRADED" ]; then
+        if [ "$health_status" = "HEALTHY" ] ||
+           [ "$health_status" = "DEGRADED" ]; then
+          break
+        fi
+        sleep 2
+      done
+      if [ "$health_status" = "HEALTHY" ] ||
+         [ "$health_status" = "DEGRADED" ]; then
         echo "  ✅ 回滚后 health=$health_status"
       else
-        echo "  ⚠️  回滚后 health=$health_status（非 HEALTHY/DEGRADED）"
+        echo "  ⚠️  回滚后等待 90 秒 health=$health_status（非 HEALTHY/DEGRADED）"
         rollback_ok=false
       fi
     fi
@@ -201,7 +224,7 @@ if [ ! -x "$HZWCTL" ]; then
   echo "  hzwctl 缺失必须硬失败，不跳过预检"
   exit 3
 fi
-if ! "$HZWCTL" preflight --release "$RELEASE_DIR" --config "$CONFIG_PATH" --offline --activation; then
+if ! sudo "$HZWCTL" preflight --release "$RELEASE_DIR" --config "$CONFIG_PATH" --offline --activation; then
   echo "  ❌ 预检未通过，拒绝激活"
   exit 4
 fi
@@ -228,7 +251,7 @@ echo "  ✅ 离线 smoke 通过"
 # 4-5. 原子切换 current（mv -T）
 # ---------------------------------------------------------------------------
 echo "[4/10] 准备原子切换..."
-mkdir -p "$BASE_DIR"
+sudo mkdir -p "$BASE_DIR"
 
 if [ -L "$CURRENT_LINK" ]; then
   OLD_TARGET="$(readlink -f "$CURRENT_LINK")"
@@ -236,16 +259,27 @@ if [ -L "$CURRENT_LINK" ]; then
 fi
 
 CURRENT_NEW="${BASE_DIR}/.current.new.$$"
-ln -sfn "$RELEASE_DIR" "$CURRENT_NEW"
+if ! sudo ln -sfn "$RELEASE_DIR" "$CURRENT_NEW"; then
+  echo "  ❌ 无法创建候选 current 链接"
+  exit 4
+fi
 
 echo "[5/10] 原子替换 current..."
 if [ -L "$CURRENT_LINK" ]; then
   OLD_TARGET="$(readlink -f "$CURRENT_LINK")"
-  ln -sfn "$OLD_TARGET" "$PREVIOUS_LINK"
+  if ! sudo ln -sfn "$OLD_TARGET" "$PREVIOUS_LINK"; then
+    echo "  ❌ 无法更新 previous 链接"
+    sudo unlink "$CURRENT_NEW" 2>/dev/null || true
+    exit 4
+  fi
   echo "  previous -> $OLD_TARGET"
 fi
 
-mv -T "$CURRENT_NEW" "$CURRENT_LINK"
+if ! sudo mv -T "$CURRENT_NEW" "$CURRENT_LINK"; then
+  echo "  ❌ 原子替换 current 失败，current 保持原状"
+  sudo unlink "$CURRENT_NEW" 2>/dev/null || true
+  exit 4
+fi
 echo "  current -> $RELEASE_DIR"
 
 # ---------------------------------------------------------------------------
@@ -271,7 +305,7 @@ if [ ! -x "$HZWCTL_CURRENT" ]; then
   perform_rollback
   exit "$RESULT_CODE"
 fi
-if ! "$HZWCTL_CURRENT" wait-business --timeout 30; then
+if ! sudo "$HZWCTL_CURRENT" wait-business --timeout 30; then
   echo "  ❌ Business 未就绪"
   RESULT_CODE=5
   perform_rollback
@@ -280,16 +314,16 @@ fi
 echo "  ✅ Business 就绪"
 
 # ---------------------------------------------------------------------------
-# 8. wait-video
+# 8. 严格 wait-health
 # ---------------------------------------------------------------------------
-echo "[8/10] 等待 Video 就绪..."
-if ! "$HZWCTL_CURRENT" wait-video --timeout 60; then
-  echo "  ❌ Video 未就绪"
+echo "[8/10] 等待 A/B 全链路严格健康..."
+if ! sudo "$HZWCTL_CURRENT" wait-health --timeout 180; then
+  echo "  ❌ 严格健康门禁未通过"
   RESULT_CODE=6
   perform_rollback
   exit "$RESULT_CODE"
 fi
-echo "  ✅ Video 就绪"
+echo "  ✅ A/B 全链路健康"
 
 # ---------------------------------------------------------------------------
 # 9. 60 秒 smoke
@@ -300,7 +334,7 @@ if [ "$NO_SMOKE" = false ]; then
   SMOKE_END=$((SECONDS + 60))
   while [ $SECONDS -lt $SMOKE_END ]; do
     sleep 5
-    if ! "$HZWCTL_CURRENT" smoke-test >/dev/null 2>&1; then
+    if ! sudo "$HZWCTL_CURRENT" smoke-test >/dev/null 2>&1; then
       echo "  ⚠️  smoke 检查失败"
       SMOKE_PASS=false
       break

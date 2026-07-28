@@ -15,6 +15,7 @@
 #define HZW_APPLICATION_DUAL_STREAM_APPLICATION_H
 
 #include <atomic>
+#include <deque>
 #include <string>
 #include <thread>
 #include "pipeline/single_stream_pipeline.h"
@@ -31,6 +32,7 @@ struct DualStreamConfig {
   std::string detector_mode = "per_stream";
   bool run_a = true;   // 是否启动 A 路
   bool run_b = true;   // 是否启动 B 路
+  HealthThresholds health_thresholds;
 };
 
 class DualStreamApplication {
@@ -68,6 +70,8 @@ class DualStreamApplication {
   // 上次采样时的重连累计值，用于计算单窗口重连增量（重连风暴检测）
   int64_t prev_reconnect_a_ = 0;
   int64_t prev_reconnect_b_ = 0;
+  std::deque<int64_t> reconnect_times_a_;
+  std::deque<int64_t> reconnect_times_b_;
   // 单路健康防抖器（跨采样保持，抑制状态抖动/假恢复）
   StreamHealthDebouncer debouncer_a_;
   StreamHealthDebouncer debouncer_b_;

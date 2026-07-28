@@ -76,6 +76,10 @@ bool PipelineConfig::validate(std::string& err) const {
   if (bmodel_path.empty()) { err = "bmodel_path 为空"; return false; }
   if (source_fps <= 0) { err = "source_fps 非法"; return false; }
   if (output_fps <= 0) { err = "output_fps 非法"; return false; }
+  if (output_width < 320 || output_height < 240 ||
+      (output_width % 2) != 0 || (output_height % 2) != 0) {
+    err = "输出分辨率必须为不小于320x240的偶数"; return false;
+  }
   if (inference_fps <= 0) { err = "inference_fps 非法"; return false; }
   if (inference_fps > output_fps) { err = "inference_fps 大于 output_fps"; return false; }
   if (!is_rtsp) {
@@ -109,18 +113,21 @@ bool PipelineConfig::validate(std::string& err) const {
     if (!ro.validate(err)) return false;
   }
   if (jitter_buffer_size < 0) { err = "jitter_buffer_size 不能为负"; return false; }
+  if (enable_business && event_directory.compare(0, 6, "/data/") != 0) {
+    err = "事件目录必须位于 /data"; return false;
+  }
   return true;
 }
 
 SingleStreamPipeline::SingleStreamPipeline() = default;
 SingleStreamPipeline::~SingleStreamPipeline() {
   request_stop();
-  if (business_jsonl_) { std::fclose(business_jsonl_); business_jsonl_ = nullptr; }
   if (t_capture_.joinable()) t_capture_.join();
   if (t_decode_.joinable()) t_decode_.join();
   if (t_process_.joinable()) t_process_.join();
   if (t_encode_.joinable()) t_encode_.join();
   if (t_metrics_.joinable()) t_metrics_.join();
+  if (event_writer_) event_writer_->stop();
 }
 
 void SingleStreamPipeline::set_error(int code, const std::string& msg) {
@@ -250,7 +257,10 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
                detector_->output_name().c_str());
   std::fflush(stdout);
 
-  bool want_bmcv = (cfg_.preprocess == "bmcv" || cfg_.draw_mode == "bmcv");
+  const bool resize_output =
+      cfg_.output_width != source_w_ || cfg_.output_height != source_h_;
+  bool want_bmcv =
+      (cfg_.preprocess == "bmcv" || cfg_.draw_mode == "bmcv" || resize_output);
   if (want_bmcv) {
     std::string berr;
     if (bmcv_.init(detector_->handle(), source_w_, source_h_, berr)) {
@@ -274,9 +284,16 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     std::fflush(stdout);
   }
 
-  if (!sink_.open(cfg_.output_path, source_w_, source_h_, cfg_.output_fps,
+  if (resize_output && !bmcv_.ready()) {
+    std::fprintf(stderr,
+                 "错误 | 视频输出 | 输出缩放要求 BMCV 可用，禁止静默回退源分辨率\n");
+    return 5;
+  }
+  if (!sink_.open(cfg_.output_path, cfg_.output_width, cfg_.output_height,
+                  cfg_.output_fps,
                   cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder,
-                  cfg_.sink_type, err)) {
+                  cfg_.sink_type, true,
+                  resize_output ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_NV12, err)) {
     std::fprintf(stderr, "错误 | 视频输出 | %s\n", err.c_str());
     return sink_.resource_fatal() ? 70 : 5;
   }
@@ -289,11 +306,27 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     } else {
       std::fprintf(stdout, "信息 | 业务 | Sidecar 连接失败，降级为仅检测\n");
     }
-    if (!cfg_.business_jsonl_path.empty()) {
-      business_jsonl_ = std::fopen(cfg_.business_jsonl_path.c_str(), "a");
-      if (business_jsonl_) {
-        std::fprintf(stdout, "信息 | 业务 | JSONL 输出 %s\n", cfg_.business_jsonl_path.c_str());
-      }
+    event_writer_ = std::make_unique<AsyncJsonlWriter>();
+    AsyncJsonlWriterConfig writer_cfg;
+    writer_cfg.directory = cfg_.event_directory;
+    writer_cfg.stream_id = cfg_.stream_id;
+    writer_cfg.max_size_mb = cfg_.event_rotate_size_mb;
+    writer_cfg.rotate_seconds = cfg_.event_rotate_seconds;
+    writer_cfg.retention_days = cfg_.event_retention_days;
+    writer_cfg.sync_seconds = cfg_.event_sync_seconds;
+    writer_cfg.queue_max_mb = cfg_.event_queue_max_mb;
+    writer_cfg.disk_warn_mb = cfg_.event_disk_warn_mb;
+    writer_cfg.disk_stop_mb = cfg_.event_disk_stop_mb;
+    std::string writer_err;
+    if (event_writer_->start(writer_cfg, writer_err)) {
+      std::fprintf(stdout,
+                   "信息 | 业务 | 异步 JSONL 目录=%s 轮转=%dMB/%ds 保留=%d天\n",
+                   cfg_.event_directory.c_str(), cfg_.event_rotate_size_mb,
+                   cfg_.event_rotate_seconds, cfg_.event_retention_days);
+    } else {
+      std::fprintf(stderr,
+                   "告警 | 业务 | 事件写入已禁用（视频继续）: %s\n",
+                   writer_err.c_str());
     }
   }
 
@@ -338,6 +371,7 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
 
   sink_.close();
   source_.close();
+  if (event_writer_) event_writer_->stop();
 
   std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
   std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s sink=%s RTSP重连=%d RTMP重连=%d 退出码=%d\n",
@@ -646,10 +680,11 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
             }
             esnap.enrichment_status = business_client_->state();
             // 写入合法 JSONL
-            if (business_jsonl_ && !esnap.detections.empty()) {
+            if (event_writer_ && !esnap.detections.empty()) {
               std::string j;
               j.reserve(512);
-              j += "{\"stream_id\":\"" + escape_json_str(cfg.stream_id) + "\"";
+              j += "{\"schema_version\":1";
+              j += ",\"stream_id\":\"" + escape_json_str(cfg.stream_id) + "\"";
               j += ",\"frame_sequence\":" + std::to_string(vf.sequence);
               j += ",\"timestamp_ms\":" + std::to_string(t3);
               j += ",\"coordinate_mode\":\"" + escape_json_str(cfg.coordinate_mode) + "\"";
@@ -688,8 +723,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
                 j += "}";
               }
               j += "]}\n";
-              std::fwrite(j.data(), 1, j.size(), business_jsonl_);
-              std::fflush(business_jsonl_);
+              event_writer_->enqueue(std::move(j));
             }
             (void)enrich_ok;
           } else {
@@ -709,6 +743,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     // 绿色：AIS 已匹配；黄色：坐标有效但 AIS 未匹配；红色：业务增强不可用
     EnrichedDetectionSnapshot esnap = enriched_snapshot_.get();
     const bool has_draw = !esnap.expired(proc_start, cfg.result_ttl_ms) && !esnap.detections.empty();
+    std::vector<BmcvProcessor::ColoredRect> bmcv_overlays;
     if (cpu_draw) {
       int64_t tdraw = now_ms();
       const uint8_t* src[2] = {f->data[0], f->data[1]};
@@ -745,8 +780,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
     } else if (bmcv_draw) {
       int64_t tdraw = now_ms();
       if (has_draw) {
-        std::vector<BmcvProcessor::ColoredRect> rects;
-        rects.reserve(esnap.detections.size());
+        bmcv_overlays.reserve(esnap.detections.size());
         for (const auto& e : esnap.detections) {
           BmcvProcessor::ColoredRect r;
           r.x1 = e.x1; r.y1 = e.y1; r.x2 = e.x2; r.y2 = e.y2;
@@ -757,13 +791,6 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           } else {
             r.r = 255; r.g = 0; r.b = 0;       // 红色：业务不可用
           }
-          rects.push_back(r);
-        }
-        if (!bmcv_.draw_colored_rectangles(f, rects, berr)) {
-          set_error(10, "BMCV 绘制失败: " + berr);
-        }
-        // 融合信息文字（BMCV 仅画矩形，文字在 host NV12 上补绘）
-        for (const auto& e : esnap.detections) {
           char label[160];
           if (e.ais_matched && !e.mmsi.empty()) {
             if (!e.ship_name.empty()) {
@@ -776,14 +803,49 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
           } else {
             std::snprintf(label, sizeof(label), "ship %.2f", e.score);
           }
-          draw_label_nv12(f->data[0], f->linesize[0],
-                          f->data[1], f->linesize[1],
-                          source_w_, source_h_,
-                          static_cast<int>(e.x1), static_cast<int>(e.y1),
-                          label, 2);
+          r.label = label;
+          bmcv_overlays.push_back(std::move(r));
+        }
+        if (cfg.output_width == source_w_ && cfg.output_height == source_h_) {
+          if (!bmcv_.draw_colored_rectangles(f, bmcv_overlays, berr)) {
+            set_error(10, "BMCV 绘制失败: " + berr);
+          }
+          // 不缩放的兼容路径仍在 host NV12 上补绘文字。
+          for (const auto& r : bmcv_overlays) {
+            draw_label_nv12(f->data[0], f->linesize[0],
+                            f->data[1], f->linesize[1],
+                            source_w_, source_h_,
+                            static_cast<int>(r.x1), static_cast<int>(r.y1),
+                            r.label.c_str(), 2);
+          }
         }
       }
       metrics_.record_draw_ms(ms_between(tdraw, now_ms()));
+    }
+
+    if (cfg.output_width != source_w_ || cfg.output_height != source_h_) {
+      AVFrame* scaled = nullptr;
+      std::string resize_err;
+      if (!bmcv_.resize_yuv420p(f, cfg.output_width, cfg.output_height,
+                                &scaled, resize_err,
+                                bmcv_draw ? &bmcv_overlays : nullptr)) {
+        vf.release();
+        set_error(10, "BMCV 输出缩放失败: " + resize_err);
+        break;
+      }
+      const int64_t sequence = vf.sequence;
+      const int64_t pts = vf.pts;
+      const int64_t capture_time_ms = vf.capture_time_ms;
+      const int source_epoch = vf.source_epoch;
+      vf.release();  // 归还解码器帧；缩放 DMA 帧由 FFmpeg 引用计数独立持有。
+      vf.sequence = sequence;
+      vf.pts = pts;
+      vf.capture_time_ms = capture_time_ms;
+      vf.source_epoch = source_epoch;
+      vf.width = cfg.output_width;
+      vf.height = cfg.output_height;
+      vf.frame = scaled;
+      f = scaled;
     }
 
     const int64_t e2e = now_ms() - vf.capture_time_ms;

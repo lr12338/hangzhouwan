@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 extern "C" {
 #include "bmlib_runtime.h"
@@ -10,6 +11,29 @@ extern "C" {
 }
 
 namespace hzw {
+
+namespace {
+
+// h264_bm 的 DMA 输入契约使用 data[4..6] 承载设备物理地址，同时仍要求
+// AVFrame 带有可引用的 buf[]。Owner 由 buf[0] 的释放回调持有，确保编码器
+// 延迟引用帧期间 bm_image 不会被下一帧复用或提前释放。
+struct DmaFrameOwner {
+  bm_image image{};
+  bool image_valid = false;
+  uint8_t* host_placeholder = nullptr;
+};
+
+void free_dma_frame(void* opaque, uint8_t*) {
+  auto* owner = static_cast<DmaFrameOwner*>(opaque);
+  if (!owner) return;
+  if (owner->image_valid) bm_image_destroy(owner->image);
+  av_free(owner->host_placeholder);
+  delete owner;
+}
+
+void free_dma_plane_ref(void*, uint8_t*) {}
+
+}  // namespace
 
 struct BmcvProcessor::Impl {
   bm_handle_t handle = nullptr;
@@ -47,7 +71,6 @@ bool BmcvProcessor::init(void* handle_void, int src_w, int src_h, std::string& e
     bm_image_destroy(p_->draw_img);
     p_->images_valid = false;
   }
-
   p_->handle = static_cast<bm_handle_t>(handle_void);
   p_->src_w = src_w;
   p_->src_h = src_h;
@@ -189,6 +212,176 @@ bool BmcvProcessor::draw_colored_rectangles(AVFrame* frame,
   void* dst_planes[2] = {frame->data[0], frame->data[1]};
   st = bm_image_copy_device_to_host(p_->draw_img, dst_planes);
   if (st != BM_SUCCESS) { err = "BMCV draw: D2H 失败"; return false; }
+  return true;
+}
+
+bool BmcvProcessor::resize_yuv420p(AVFrame* frame, int output_width,
+                                   int output_height, AVFrame** output,
+                                   std::string& err,
+                                   const std::vector<ColoredRect>* overlays) {
+  if (!p_ || !p_->ready) { err = "BMCV: 未初始化"; return false; }
+  if (!frame || !output || output_width <= 0 || output_height <= 0 ||
+      (output_width % 2) != 0 || (output_height % 2) != 0) {
+    err = "BMCV resize: 参数非法";
+    return false;
+  }
+  *output = nullptr;
+  auto* owner = new (std::nothrow) DmaFrameOwner();
+  if (!owner) {
+    err = "BMCV resize: 分配 DMA 帧所有者失败";
+    return false;
+  }
+
+  int stride[3] = {output_width, output_width / 2, output_width / 2};
+  bm_status_t st = bm_image_create(
+      p_->handle, output_height, output_width, FORMAT_YUV420P,
+      DATA_TYPE_EXT_1N_BYTE, &owner->image, stride);
+  if (st != BM_SUCCESS) {
+    delete owner;
+    err = "BMCV resize: 创建输出 YUV420P 失败";
+    return false;
+  }
+  owner->image_valid = true;
+  st = bm_image_alloc_dev_mem(owner->image, BMCV_HEAP0_ID);
+  if (st != BM_SUCCESS) {
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: 分配输出设备内存失败";
+    return false;
+  }
+
+  // 每帧只做一次 H2D，先在设备上缩放。矩形稍后按比例映射到输出图像
+  // 批量绘制，避免在 2560x1440 原图上逐框渲染。
+  void* host_planes[2] = {frame->data[0], frame->data[1]};
+  st = bm_image_copy_host_to_device(p_->src_img, host_planes);
+  if (st != BM_SUCCESS) {
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: H2D 失败";
+    return false;
+  }
+
+  st = bmcv_image_vpp_convert(p_->handle, 1, p_->src_img, &owner->image,
+                              nullptr, BMCV_INTER_LINEAR);
+  if (st != BM_SUCCESS) {
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: VPP 缩放失败";
+    return false;
+  }
+
+  if (overlays && !overlays->empty()) {
+    struct RectBatch {
+      unsigned char r;
+      unsigned char g;
+      unsigned char b;
+      std::vector<bmcv_rect_t> rects;
+    };
+    RectBatch batches[3] = {
+        {0, 255, 0, {}}, {255, 255, 0, {}}, {255, 0, 0, {}}};
+    const float scale_x =
+        static_cast<float>(output_width) / static_cast<float>(p_->src_w);
+    const float scale_y =
+        static_cast<float>(output_height) / static_cast<float>(p_->src_h);
+    for (const auto& r : *overlays) {
+      int x1 = static_cast<int>(r.x1 * scale_x);
+      int y1 = static_cast<int>(r.y1 * scale_y);
+      int x2 = static_cast<int>(r.x2 * scale_x);
+      int y2 = static_cast<int>(r.y2 * scale_y);
+      if (x1 < 0) x1 = 0;
+      if (y1 < 0) y1 = 0;
+      if (x2 > output_width) x2 = output_width;
+      if (y2 > output_height) y2 = output_height;
+      if (x2 <= x1 || y2 <= y1) continue;
+      bmcv_rect_t rect{x1, y1, x2 - x1, y2 - y1};
+      RectBatch* batch = &batches[2];
+      if (r.r == 0 && r.g == 255 && r.b == 0) batch = &batches[0];
+      else if (r.r == 255 && r.g == 255 && r.b == 0) batch = &batches[1];
+      batch->rects.push_back(rect);
+    }
+    for (auto& batch : batches) {
+      if (batch.rects.empty()) continue;
+      st = bmcv_image_draw_rectangle(
+          p_->handle, owner->image, static_cast<int>(batch.rects.size()),
+          batch.rects.data(), 2, batch.r, batch.g, batch.b);
+      if (st != BM_SUCCESS) {
+        bm_image_destroy(owner->image);
+        delete owner;
+        err = "BMCV resize: 输出设备矩形绘制失败";
+        return false;
+      }
+    }
+  }
+
+  AVFrame* out = av_frame_alloc();
+  if (!out) {
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: 分配 AVFrame 失败";
+    return false;
+  }
+  out->format = AV_PIX_FMT_YUV420P;
+  out->width = output_width;
+  out->height = output_height;
+
+  bm_device_mem_t device_mem[3]{};
+  bm_image_format_info_t image_info{};
+  if (bm_image_get_device_mem(owner->image, device_mem) != BM_SUCCESS ||
+      bm_image_get_format_info(&owner->image, &image_info) != BM_SUCCESS) {
+    av_frame_free(&out);
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: 读取设备平面信息失败";
+    return false;
+  }
+
+  // 与 Sophon 官方 bm_image_to_avframe 契约一致：buf[] 只负责引用生命周期，
+  // 编码器在 is_dma_buffer=1 时从 data[4..6] 读取设备地址。
+  const int y_bytes = output_width * output_height;
+  const int chroma_bytes = y_bytes / 4;
+  owner->host_placeholder =
+      static_cast<uint8_t*>(av_malloc(static_cast<size_t>(y_bytes) * 3 / 2));
+  if (!owner->host_placeholder) {
+    av_frame_free(&out);
+    bm_image_destroy(owner->image);
+    delete owner;
+    err = "BMCV resize: 分配 AVFrame 引用占位缓冲失败";
+    return false;
+  }
+
+  uint8_t* y = owner->host_placeholder;
+  uint8_t* u = y + y_bytes;
+  uint8_t* v = u + chroma_bytes;
+  out->buf[0] = av_buffer_create(
+      y, y_bytes, free_dma_frame, owner, AV_BUFFER_FLAG_READONLY);
+  if (!out->buf[0]) {
+    bm_image_destroy(owner->image);
+    av_free(owner->host_placeholder);
+    delete owner;
+    av_frame_free(&out);
+    err = "BMCV resize: 创建 DMA 帧主引用失败";
+    return false;
+  }
+  // 从此处起 owner 所有权已转交给 out->buf[0]。
+  out->buf[1] = av_buffer_create(
+      u, chroma_bytes, free_dma_plane_ref, nullptr, AV_BUFFER_FLAG_READONLY);
+  out->buf[2] = av_buffer_create(
+      v, chroma_bytes, free_dma_plane_ref, nullptr, AV_BUFFER_FLAG_READONLY);
+  if (!out->buf[1] || !out->buf[2]) {
+    av_frame_free(&out);
+    err = "BMCV resize: 创建 DMA 帧平面引用失败";
+    return false;
+  }
+  out->data[0] = y;
+  out->data[1] = u;
+  out->data[2] = v;
+  for (int i = 0; i < 3; ++i) {
+    out->data[4 + i] = reinterpret_cast<uint8_t*>(
+        static_cast<uintptr_t>(bm_mem_get_device_addr(device_mem[i])));
+    out->linesize[i] = image_info.stride[i];
+    out->linesize[4 + i] = image_info.stride[i];
+  }
+  *output = out;
   return true;
 }
 

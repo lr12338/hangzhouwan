@@ -42,6 +42,7 @@ def make_jsonl_line(stream_id, frame_sequence, timestamp_ms, coordinate_mode,
             d["ais_lat_aligned"] = e["ais_lat_aligned"]
         dets.append(d)
     return json.dumps({
+        "schema_version": 1,
         "stream_id": stream_id,
         "frame_sequence": frame_sequence,
         "timestamp_ms": timestamp_ms,
@@ -74,6 +75,7 @@ class TestJsonlFormat(unittest.TestCase):
         line = make_jsonl_line("A", 123, 1000, "sklearn", "FULL",
                                [self._base_det()])
         obj = json.loads(line)
+        self.assertEqual(obj["schema_version"], 1)
         self.assertEqual(obj["stream_id"], "A")
         self.assertEqual(obj["frame_sequence"], 123)
         self.assertEqual(obj["timestamp_ms"], 1000)

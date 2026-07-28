@@ -96,6 +96,9 @@ class BusinessEnrichmentService:
             self.config.mqtt_topics,
             self.config.mqtt_keepalive,
             self.config.mqtt_reconnect_sec,
+            event_topic=self.config.mqtt_event_topic,
+            offline_max_records=self.config.mqtt_offline_max_records,
+            offline_max_bytes=self.config.mqtt_offline_max_bytes,
         )
         threading.Thread(target=self.mqtt_sub.run, daemon=True).start()
 
@@ -229,6 +232,15 @@ class BusinessEnrichmentService:
             self._record_evidence(stream_id, frame_seq, results, req)
 
         processing_ms = round((time.time() - t0) * 1000, 2)
+        if results and self.mqtt_sub:
+            self.mqtt_sub.publish_event({
+                "schema_version": 1,
+                "timestamp_ms": int(time.time() * 1000),
+                "stream_id": stream_id,
+                "frame_sequence": frame_seq,
+                "coordinate_mode": coord_mode,
+                "results": results,
+            })
         return proto.make_response(
             stream_id, frame_seq, results, processing_ms,
             coordinate_mode=coord_mode,
@@ -314,6 +326,10 @@ class BusinessEnrichmentService:
             os.unlink(sock_path)
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(sock_path)
+        # Video 与 Business 使用独立账户、共享 hangzhouwan 组。Unix Socket
+        # 连接需要写权限；显式设为 0660，避免 UMask=0027 生成 0750 后组成员
+        # 只能读取却无法 connect。
+        os.chmod(sock_path, 0o660)
         self._server.listen(self.config.max_connections)
         self._server.settimeout(1.0)
         print(f"信息 | Sidecar | 监听 {sock_path} 模式={self.config.coordinate_mode} "

@@ -55,11 +55,22 @@ class BmcvProcessor {
   struct ColoredRect {
     float x1, y1, x2, y2;
     unsigned char r, g, b;
+    std::string label;
   };
   // 在 AVFrame(NV12) 上 in-place 绘制带颜色的矩形。
   bool draw_colored_rectangles(AVFrame* frame,
                                const std::vector<ColoredRect>& rects,
                                std::string& err);
+
+  // 绘制完成后的硬件缩放：源 NV12 -> 指定输出 YUV420P，并返回由 FFmpeg
+  // 引用计数管理的设备内存 AVFrame。data[4..6] 携带物理地址，供 h264_bm
+  // 以 is_dma_buffer=1 零拷贝编码；释放 AVFrame 时自动销毁对应 bm_image。
+  // overlays 非空时先缩放，再按比例映射坐标并在输出设备图像上批量绘制
+  // 矩形，不回写 host。检测/坐标仍保持原始分辨率；结构化详情由
+  // JSONL/MQTT 保留。这样可避免在 2560x1440 上逐框渲染拖垮吞吐。
+  bool resize_yuv420p(AVFrame* frame, int output_width, int output_height,
+                      AVFrame** output, std::string& err,
+                      const std::vector<ColoredRect>* overlays = nullptr);
 
   bool ready() const;
 

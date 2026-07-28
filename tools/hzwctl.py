@@ -6,6 +6,7 @@
   preflight          生产预检（支持 --release/--config/--offline/--activation/--runtime）
   status             系统状态汇总（优先读 Video 健康接口）
   health             健康状态（优先读 Video 健康接口）
+  wait-health        严格等待 Sidecar、A/B RTSP/RTMP、输出/推理 FPS 就绪
   wait-business      等待 business 就绪
   wait-video         等待 video 服务就绪
   start              启动服务（不自动 enable 生产 systemd）
@@ -299,6 +300,22 @@ def _check_config_consistency(config_path, result):
     streams = doc.get("streams", [])
     enabled = [s for s in streams if s.get("enabled")]
     result.check("启用流配置", len(enabled) > 0, f"{len(enabled)} streams")
+    valid_output = all(
+        s.get("output_width") == 1280
+        and s.get("output_height") == 720
+        and s.get("output_fps") == 10
+        and s.get("output_bitrate_kbps") == 1200
+        and s.get("gop", 20) == 20
+        for s in enabled
+    )
+    result.check("生产输出规格 1280x720@10/1200kbps/GOP20",
+                 valid_output, f"{len(enabled)} streams")
+
+    event_cfg = doc.get("event_writer", {})
+    event_dir = event_cfg.get("directory", "")
+    result.check("事件目录仅位于 /data",
+                 event_dir.startswith("/data/"), event_dir or "未配置")
+    result.check("/data 为独立挂载点", os.path.ismount("/data"), "/data")
 
     # MQTT 配置
     mqtt = doc.get("mqtt", {})
@@ -516,18 +533,25 @@ def cmd_preflight(args):
                      os.path.islink(CURRENT_LINK) or not os.path.exists(CURRENT_LINK),
                      "已存在" if os.path.islink(CURRENT_LINK) else "不存在（首次激活）")
 
-        # 磁盘余量
-        rc, out, _ = run("df -m /opt 2>/dev/null | tail -1 | awk '{print $4}'", timeout=3)
-        avail = int(out) if out.isdigit() else 0
-        result.check("磁盘余量 >=500MB", avail >= 500, f"{avail}MB")
+        # 根盘仅承载系统和不可变链接；事件数据必须位于独立 /data。
+        root_free = shutil.disk_usage("/").free // (1024 * 1024)
+        data_free = (
+            shutil.disk_usage("/data").free // (1024 * 1024)
+            if os.path.ismount("/data") else 0
+        )
+        result.check("根盘余量 >=1.5GB", root_free >= 1536,
+                     f"{root_free}MB")
+        result.check("/data 余量 >=1GB", data_free >= 1024,
+                     f"{data_free}MB")
 
-        # 日志和数据目录
-        for d in ["/var/log/hangzhouwan", "/var/lib/hangzhouwan"]:
-            try:
-                os.makedirs(d, exist_ok=True)
-            except PermissionError:
-                pass
-            result.check(f"目录 {d}", os.path.isdir(d) and os.access(d, os.W_OK))
+        for d in ["/data/hangzhouwan/events",
+                  "/data/hangzhouwan/monitor",
+                  "/run/hangzhouwan"]:
+            result.check(
+                f"目录 {d}",
+                os.path.isdir(d) and os.access(d, os.W_OK),
+                "必须预先创建且当前服务身份可写",
+            )
 
         # video systemd 单元
         video_svc_path = "/etc/systemd/system/hangzhouwan-video.service"
@@ -700,13 +724,19 @@ def cmd_health(args):
     vh = query_video_health("health")
     if vh.get("available", False) and "error" not in vh:
         status = vh.get("status", "UNKNOWN")
-        print("=== Video 健康（Socket）===")
-        print(json.dumps(vh, ensure_ascii=False, indent=2))
+        if getattr(args, "json", False):
+            print(json.dumps(vh, ensure_ascii=False, separators=(",", ":")))
+        else:
+            print("=== Video 健康（Socket）===")
+            print(json.dumps(vh, ensure_ascii=False, indent=2))
         return {"HEALTHY": 0, "DEGRADED": 1, "FAILED": 2}.get(status, 2)
 
-    print("=== Business Sidecar 健康 ===")
     health = query_sidecar_health(BUSINESS_SOCK)
-    print(json.dumps(health, ensure_ascii=False, indent=2))
+    if getattr(args, "json", False):
+        print(json.dumps(health, ensure_ascii=False, separators=(",", ":")))
+    else:
+        print("=== Business Sidecar 健康 ===")
+        print(json.dumps(health, ensure_ascii=False, indent=2))
     return 0 if health.get("connected") or health.get("coordinate_mode") else 1
 
 
@@ -724,7 +754,7 @@ def cmd_wait(args):
             time.sleep(1)
         print("❌ business 超时未就绪")
         return 1
-    else:
+    elif args.service == "video":
         print(f"等待 video 就绪（最长 {timeout}s）...")
         while time.time() < deadline:
             # 优先检查 Video 健康 Socket
@@ -740,6 +770,45 @@ def cmd_wait(args):
                     return 0
             time.sleep(1)
         print("❌ video 超时未就绪")
+        return 1
+    else:
+        print(f"等待严格健康门禁（最长 {timeout}s）...")
+        last_reason = "尚未获得健康数据"
+        while time.time() < deadline:
+            sidecar = query_sidecar_health(BUSINESS_SOCK, timeout=1)
+            vh = query_video_health("health", timeout=1)
+            sidecar_ok = (
+                sidecar.get("status") == "HEALTHY"
+                and bool(sidecar.get("model_a_loaded"))
+                and bool(sidecar.get("model_b_loaded"))
+            )
+            streams = vh.get("streams", {})
+            stream_failures = []
+            for sid in ("A", "B"):
+                s = streams.get(sid, {})
+                if not s.get("rtsp_connected"):
+                    stream_failures.append(f"{sid}:RTSP")
+                if not s.get("rtmp_connected"):
+                    stream_failures.append(f"{sid}:RTMP")
+                if float(s.get("output_fps", 0) or 0) < 7:
+                    stream_failures.append(f"{sid}:output_fps")
+                if float(s.get("inference_fps", 0) or 0) < 4:
+                    stream_failures.append(f"{sid}:inference_fps")
+            business_ok = vh.get("business_link") in ("HEALTHY", "DISABLED")
+            storage_ok = vh.get("storage", {}).get("state") in ("OK", "WARNING")
+            if (vh.get("available") and sidecar_ok and not stream_failures
+                    and business_ok and storage_ok
+                    and vh.get("status") == "HEALTHY"):
+                print("✅ Sidecar、A/B 数据面与资源门禁连续状态正常")
+                return 0
+            last_reason = (
+                f"video={vh.get('status', vh.get('error', 'UNKNOWN'))} "
+                f"sidecar={sidecar_ok} business={vh.get('business_link')} "
+                f"storage={vh.get('storage', {}).get('state')} "
+                f"failures={','.join(stream_failures) or 'none'}"
+            )
+            time.sleep(2)
+        print(f"❌ 严格健康门禁超时: {last_reason}")
         return 1
 
 
@@ -850,11 +919,14 @@ def main():
     p_pre.add_argument("--runtime", action="store_true", help="仅运行时冲突检查")
 
     sub.add_parser("status", help="系统状态")
-    sub.add_parser("health", help="健康状态")
+    health_parser = sub.add_parser("health", help="健康状态")
+    health_parser.add_argument("--json", action="store_true", help="只输出单行 JSON")
     w = sub.add_parser("wait-business", help="等待 business 就绪")
     w.add_argument("--timeout", type=int, default=30)
     w2 = sub.add_parser("wait-video", help="等待 video 就绪")
     w2.add_argument("--timeout", type=int, default=60)
+    wh = sub.add_parser("wait-health", help="严格等待全链路健康")
+    wh.add_argument("--timeout", type=int, default=180)
     sub.add_parser("start", help="启动服务")
     sub.add_parser("stop", help="停止服务")
     sub.add_parser("restart", help="重启服务")
@@ -873,6 +945,7 @@ def main():
         "health": (cmd_health, args),
         "wait-business": (cmd_wait, argparse.Namespace(service="business", timeout=getattr(args, "timeout", 30))),
         "wait-video": (cmd_wait, argparse.Namespace(service="video", timeout=getattr(args, "timeout", 60))),
+        "wait-health": (cmd_wait, argparse.Namespace(service="health", timeout=getattr(args, "timeout", 180))),
         "start": (cmd_start, args),
         "stop": (cmd_stop, args),
         "restart": (cmd_restart, args),

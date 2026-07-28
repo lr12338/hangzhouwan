@@ -120,6 +120,7 @@ class EnrichedSnapshotStore {
 // 将 enrichment_status 转为字符串（JSONL/日志用）。
 inline const char* enrichment_status_str(EnrichmentState s) {
   switch (s) {
+    case EnrichmentState::PENDING: return "PENDING";
     case EnrichmentState::FULL: return "FULL";
     case EnrichmentState::COORD_ONLY: return "COORD_ONLY";
     case EnrichmentState::DETECTION_ONLY: return "DETECTION_ONLY";

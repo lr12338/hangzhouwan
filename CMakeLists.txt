@@ -30,6 +30,7 @@ set(SOPHON_FFMPEG_LIB "${SOPHON_FFMPEG_ROOT}/lib")
 
 find_package(JPEG REQUIRED)  # libjpeg-turbo
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # BMRuntime 运行时库
 add_library(bmrt_runtime INTERFACE IMPORTED)
@@ -66,11 +67,12 @@ add_library(hzw_inf STATIC
   src/monitoring/pipeline_metrics.cpp
   src/monitoring/video_health_logic.cpp
   src/monitoring/video_health_server.cpp
+  src/pipeline/async_jsonl_writer.cpp
   src/pipeline/single_stream_pipeline.cpp
   src/application/dual_stream_application.cpp
   src/business/business_enrichment_client.cpp)
 target_include_directories(hzw_inf PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
-target_link_libraries(hzw_inf PUBLIC bmrt_runtime sophon_ffmpeg JPEG::JPEG Threads::Threads)
+target_link_libraries(hzw_inf PUBLIC bmrt_runtime sophon_ffmpeg JPEG::JPEG Threads::Threads ZLIB::ZLIB)
 
 # 单图推理 PoC
 add_executable(single_image_infer tools/image_inference/single_image_infer.cpp)
@@ -161,6 +163,10 @@ add_test(NAME rtmp_reconnect_decision COMMAND test_rtmp_reconnect_decision)
 add_executable(test_video_health_logic tests/unit_cpp/test_video_health_logic.cpp)
 target_link_libraries(test_video_health_logic PRIVATE hzw_inf)
 add_test(NAME video_health_logic COMMAND test_video_health_logic)
+
+add_executable(test_async_jsonl_writer tests/unit_cpp/test_async_jsonl_writer.cpp)
+target_link_libraries(test_async_jsonl_writer PRIVATE hzw_inf)
+add_test(NAME async_jsonl_writer COMMAND test_async_jsonl_writer)
 
 # 板端 forced-reconnect / VPU 显存泄漏复现工具（需 BM1684 硬件，不纳入 CTest 自动跑）
 add_executable(forced_reconnect_tool tools/dual_stream/forced_reconnect_tool.cpp)

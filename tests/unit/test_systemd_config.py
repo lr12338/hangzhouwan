@@ -47,6 +47,17 @@ class BusinessServiceTest(unittest.TestCase):
         """不应有 WantedBy=multi-user.target（不自动 enable）"""
         self.assertNotIn("WantedBy=multi-user.target", self.content)
 
+    def test_python_runtime_isolated(self):
+        self.assertIn("PYTHONNOUSERSITE=1", self.content)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", self.content)
+
+    def test_shared_socket_allows_video_group_connect(self):
+        app_path = os.path.normpath(os.path.join(
+            HERE, "..", "..", "services", "business_enrichment", "app.py"))
+        with open(app_path, encoding="utf-8") as stream:
+            app = stream.read()
+        self.assertIn("os.chmod(sock_path, 0o660)", app)
+
 
 class VideoServiceTest(unittest.TestCase):
     def setUp(self):
@@ -55,6 +66,9 @@ class VideoServiceTest(unittest.TestCase):
     def test_execstartpre_wait_business(self):
         """ExecStartPre 必须含 hzwctl wait-business"""
         self.assertIn("ExecStartPre", self.content)
+        self.assertIn("preflight --release /opt/hangzhouwan/current",
+                      self.content)
+        self.assertIn("--offline --activation", self.content)
         self.assertIn("wait-business", self.content)
         self.assertIn("--timeout 30", self.content)
 
@@ -85,6 +99,18 @@ class VideoServiceTest(unittest.TestCase):
     def test_not_enabled_by_default(self):
         self.assertNotIn("WantedBy=multi-user.target", self.content)
 
+    def test_device_whitelist_is_effective(self):
+        self.assertIn("PrivateDevices=false", self.content)
+        self.assertIn("DevicePolicy=closed", self.content)
+        for device in ("/dev/bm-tpu0", "/dev/bm-vpp", "/dev/bmdev-ctl",
+                       "/dev/ion", "/dev/jpu", "/dev/vpu"):
+            self.assertIn(f"DeviceAllow={device} rw", self.content)
+
+    def test_preflight_paths_are_writable_inside_sandbox(self):
+        for path in ("/run/hangzhouwan", "/data/hangzhouwan/events",
+                     "/data/hangzhouwan/monitor"):
+            self.assertIn(path, self.content)
+
 
 class TmpfilesTest(unittest.TestCase):
     def setUp(self):
@@ -97,7 +123,8 @@ class TmpfilesTest(unittest.TestCase):
         with open(self.path, "r", encoding="utf-8") as f:
             content = f.read()
         self.assertIn("/run/hangzhouwan", content)
-        self.assertIn("linaro", content)
+        self.assertIn("hangzhouwan", content)
+        self.assertNotIn(" linaro ", content)
 
 
 class TargetTest(unittest.TestCase):
@@ -109,6 +136,58 @@ class TargetTest(unittest.TestCase):
         self.assertIn("hangzhouwan-video.service", self.content)
 
 
+class SupervisorServiceTest(unittest.TestCase):
+    def setUp(self):
+        self.content = read_unit("hangzhouwan-supervisor.service")
+
+    def test_python_module_has_release_working_directory(self):
+        self.assertIn(
+            "WorkingDirectory=/opt/hangzhouwan/current", self.content)
+
+    def test_uses_shared_runtime_group_without_dac_capability(self):
+        self.assertIn("User=root", self.content)
+        self.assertIn("Group=hangzhouwan", self.content)
+        self.assertIn("CapabilityBoundingSet=", self.content)
+
+
+class MaintenanceRestartTest(unittest.TestCase):
+    def setUp(self):
+        self.service = read_unit("hangzhouwan-maintenance-restart.service")
+        self.timer = read_unit("hangzhouwan-maintenance-restart.timer")
+
+    def test_timer_runs_daily_at_0330(self):
+        self.assertIn("OnCalendar=*-*-* 03:30:00", self.timer)
+        self.assertIn("Persistent=true", self.timer)
+        self.assertIn("WantedBy=timers.target", self.timer)
+
+    def test_python_module_has_release_working_directory(self):
+        self.assertIn(
+            "WorkingDirectory=/opt/hangzhouwan/current", self.service)
+
+    def test_uses_shared_runtime_group(self):
+        self.assertIn("User=root", self.service)
+        self.assertIn("Group=hangzhouwan", self.service)
+
+    def test_restart_is_ordered_and_health_gated(self):
+        self.assertIn("-m services.monitoring.controlled_maintenance", self.service)
+        script_path = os.path.normpath(os.path.join(
+            HERE, "..", "..", "services", "monitoring",
+            "controlled_maintenance.py"))
+        with open(script_path, encoding="utf-8") as stream:
+            script = stream.read()
+        business = script.index(
+            '["systemctl", "restart",\n'
+            '                    "hangzhouwan-business.service"]')
+        wait_business = script.index('"wait-business"')
+        video = script.index(
+            '["systemctl", "restart",\n'
+            '                    "hangzhouwan-video.service"]')
+        wait_video = script.index('"wait-health"')
+        self.assertLess(business, wait_business)
+        self.assertLess(wait_business, video)
+        self.assertLess(video, wait_video)
+
+
 class RestartStormPreventionTest(unittest.TestCase):
     """资源致命退出码 70 触发 systemd 恢复，且配置防止高频重启风暴。
 
@@ -117,7 +196,7 @@ class RestartStormPreventionTest(unittest.TestCase):
     - SuccessExitStatus/RestartPreventExitStatus 为空：70 既非成功也未被排除，
       故退出码 70 必然触发 on-failure 重启。
     - StartLimitBurst<=5 + StartLimitIntervalSec<=300：限流窗口内最多 5 次重启，
-      超限后 systemd 进入 start-limit-hit（failed），需人工 reset-failed，
+      超限后 systemd 进入 start-limit-hit（failed），需监督器判断，
       避免资源致命（VPU 耗尽）时形成无限高频重启风暴。
     - RestartSec>=5：重启间隔，进一步降低重启频率。
     """
@@ -153,7 +232,8 @@ class RestartStormPreventionTest(unittest.TestCase):
                                  f"{name} StartLimitBurst 过大，无法防重启风暴")
             mi = re.search(r"StartLimitIntervalSec\s*=\s*(\d+)", content)
             self.assertIsNotNone(mi, f"{name} 缺少 StartLimitIntervalSec")
-            self.assertLessEqual(int(mi.group(1)), 300,
+            expected_max = 600 if name == "video" else 300
+            self.assertLessEqual(int(mi.group(1)), expected_max,
                                  f"{name} StartLimitIntervalSec 过长")
 
     def test_restart_sec_spacing(self):

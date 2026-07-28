@@ -59,7 +59,9 @@ struct StreamConfig {
   std::string coordinate_model_path;    // 坐标模型路径
   int output_fps = 10;
   int inference_fps = 5;
-  int bitrate_kbps = 800;
+  int output_width = 1280;
+  int output_height = 720;
+  int bitrate_kbps = 1200;
   int gop = 20;
   int jitter_buffer_size = 5;
   int result_ttl_ms = 1000;
@@ -125,6 +127,10 @@ struct ApplicationConfig {
   int health_check_interval_seconds = 10;
   int stream_healthy_fps = 7;
   int stream_degraded_fps = 5;
+  int inference_healthy_fps = 4;
+  int frame_stale_seconds = 15;
+  int stream_failed_seconds = 60;
+  int reconnects_per_hour = 2;
 
   // logging / disk
   int video_log_max_size_mb = 50;
@@ -134,6 +140,16 @@ struct ApplicationConfig {
   int jsonl_max_size_mb = 50;
   int jsonl_max_files = 10;
   int disk_threshold_mb = 500;
+
+  // event writer（只允许写 /data，不回退根分区）
+  std::string event_directory = "/data/hangzhouwan/events";
+  int event_rotate_size_mb = 50;
+  int event_rotate_seconds = 3600;
+  int event_retention_days = 7;
+  int event_sync_seconds = 5;
+  int event_queue_max_mb = 4;
+  int event_disk_warn_mb = 2048;
+  int event_disk_stop_mb = 1024;
 
   // streams
   std::vector<StreamConfig> streams;

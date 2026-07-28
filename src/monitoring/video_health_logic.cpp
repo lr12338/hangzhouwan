@@ -24,6 +24,31 @@ const char* level_str(StreamHealthLevel l) {
   return "UNKNOWN";
 }
 
+BusinessHealthResult compute_business_health(
+    bool enabled_a, bool link_a, const std::string& mode_a,
+    bool enabled_b, bool link_b, const std::string& mode_b) {
+  BusinessHealthResult result;
+  const bool enabled = enabled_a || enabled_b;
+  if (!enabled) {
+    result.link = "DISABLED";
+    result.mode = "PENDING";
+    result.link_healthy = true;
+    return result;
+  }
+  result.link_healthy = (!enabled_a || link_a) && (!enabled_b || link_b);
+  result.link = result.link_healthy ? "HEALTHY" : "FAILED";
+  if (mode_a == "FULL" || mode_b == "FULL") {
+    result.mode = "FULL";
+  } else if (mode_a == "COORD_ONLY" || mode_b == "COORD_ONLY") {
+    result.mode = "COORD_ONLY";
+  } else if (result.link_healthy) {
+    result.mode = "PENDING";
+  } else {
+    result.mode = "DETECTION_ONLY";
+  }
+  return result;
+}
+
 StreamHealthLevel compute_stream_level(const StreamHealthInput& s,
                                        const HealthThresholds& t) {
   // 资源致命：VPU/gmem 分配失败或解码器/编码器初始化失败 -> FAILED（最高优先级）
@@ -34,8 +59,8 @@ StreamHealthLevel compute_stream_level(const StreamHealthInput& s,
   // 已连接（最近帧在 stale 阈值内）
   if (s.output_fps < t.min_output_fps) return StreamHealthLevel::DEGRADED;
   if (!s.rtmp_connected) return StreamHealthLevel::DEGRADED;
-  if (s.inference_fps <= 0.0) return StreamHealthLevel::DEGRADED;
-  if (s.reconnect_delta > t.reconnect_storm_delta) return StreamHealthLevel::DEGRADED;
+  if (s.inference_fps < t.min_inference_fps) return StreamHealthLevel::DEGRADED;
+  if (s.reconnects_1h > t.max_reconnects_per_hour) return StreamHealthLevel::DEGRADED;
   return StreamHealthLevel::HEALTHY;
 }
 
@@ -74,7 +99,7 @@ StreamHealthLevel StreamHealthDebouncer::update(StreamHealthLevel instantaneous,
 DualHealthResult compute_dual_status(StreamHealthLevel level_a,
                                      StreamHealthLevel level_b,
                                      bool fatal_a, bool fatal_b,
-                                     bool business_full) {
+                                     bool business_link_healthy) {
   DualHealthResult r;
   r.level_a = level_a;
   r.level_b = level_b;
@@ -105,10 +130,10 @@ DualHealthResult compute_dual_status(StreamHealthLevel level_a,
     r.status = "DEGRADED";
     r.degradation = "stream_degraded";
     r.reason = std::string(a_degraded ? "A" : "") + std::string(b_degraded ? "B" : "") + "路降级";
-  } else if (!business_full) {
+  } else if (!business_link_healthy) {
     r.status = "DEGRADED";
     r.degradation = "detection_only";
-    r.reason = "业务增强降级(仅检测)";
+    r.reason = "Sidecar链路不可用(仅检测)";
   } else {
     r.status = "HEALTHY";
     r.degradation = "none";

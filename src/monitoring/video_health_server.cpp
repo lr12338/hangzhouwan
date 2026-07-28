@@ -42,9 +42,24 @@ std::string stream_to_json(const std::string& key, const StreamHealthSnapshot& s
       << ",\"last_frame_time_ms\":" << s.last_frame_time_ms
       << ",\"rtsp_reconnects\":" << s.rtsp_reconnects
       << ",\"rtmp_reconnects\":" << s.rtmp_reconnects
+      << ",\"reconnects_1h\":" << s.reconnects_1h
       << ",\"queue_length\":" << s.queue_length
       << ",\"e2e_p95_ms\":" << s.e2e_p95_ms
       << "}";
+  return oss.str();
+}
+
+std::string event_writer_to_json(const std::string& key,
+                                 const EventWriterHealthSnapshot& s) {
+  std::ostringstream oss;
+  oss << "\"" << key << "\":{"
+      << "\"running\":" << (s.running ? "true" : "false")
+      << ",\"write_enabled\":" << (s.write_enabled ? "true" : "false")
+      << ",\"low_space_warning\":" << (s.low_space_warning ? "true" : "false")
+      << ",\"queued_bytes\":" << s.queued_bytes
+      << ",\"written_records\":" << s.written_records
+      << ",\"dropped_records\":" << s.dropped_records
+      << ",\"last_error\":\"" << escape_json(s.last_error) << "\"}";
   return oss.str();
 }
 
@@ -102,6 +117,15 @@ bool VideoHealthServer::start(const std::string& socket_path) {
   if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
     ::close(listen_fd_);
     listen_fd_ = -1;
+    return false;
+  }
+  // 监督器和维护任务以独立身份、共享 hangzhouwan 组访问健康接口。
+  // connect(2) 需要 Unix Socket 写权限，不能依赖 root 的 DAC capability
+  //（加固 unit 已清空 CapabilityBoundingSet）。
+  if (::chmod(socket_path_.c_str(), 0660) < 0) {
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    ::unlink(socket_path_.c_str());
     return false;
   }
 
@@ -198,11 +222,33 @@ std::string VideoHealthServer::build_health_json() {
   oss << ",\"version\":\"" << escape_json(state_.version) << "\"";
   oss << ",\"commit\":\"" << escape_json(state_.commit) << "\"";
   oss << ",\"business_state\":\"" << escape_json(state_.business_state) << "\"";
+  oss << ",\"business_link\":\"" << escape_json(state_.business_link) << "\"";
+  oss << ",\"enrichment_mode\":\"" << escape_json(state_.enrichment_mode) << "\"";
+  oss << ",\"business_timeout_count\":" << state_.business_timeout_count;
+  oss << ",\"business_error_count\":" << state_.business_error_count;
   oss << ",\"degradation\":\"" << escape_json(state_.degradation) << "\"";
   oss << ",\"health_reason\":\"" << escape_json(state_.health_reason) << "\"";
   oss << ",\"uptime_seconds\":" << state_.uptime_seconds;
   oss << ",\"rss_mb\":" << state_.rss_mb;
   oss << ",\"tpu_info\":\"" << escape_json(state_.tpu_info) << "\"";
+  oss << ",\"resource\":{"
+      << "\"rss_mb\":" << state_.rss_mb
+      << ",\"tpu_info\":\"" << escape_json(state_.tpu_info) << "\""
+      << ",\"fatal\":" << (state_.resource_fatal ? "true" : "false") << "}";
+  oss << ",\"storage\":{"
+      << "\"path\":\"" << escape_json(state_.storage.path) << "\""
+      << ",\"available\":" << (state_.storage.available ? "true" : "false")
+      << ",\"free_bytes\":" << state_.storage.free_bytes
+      << ",\"state\":\"" << escape_json(state_.storage.state) << "\"}";
+  oss << ",\"event_writer\":{"
+      << event_writer_to_json("A", state_.event_writer_a) << ","
+      << event_writer_to_json("B", state_.event_writer_b) << "}";
+  oss << ",\"active_alerts\":[";
+  for (size_t i = 0; i < state_.active_alerts.size(); ++i) {
+    if (i) oss << ",";
+    oss << "\"" << escape_json(state_.active_alerts[i]) << "\"";
+  }
+  oss << "]";
   oss << ",\"streams\":{";
   oss << stream_to_json("A", state_.stream_a);
   oss << "," << stream_to_json("B", state_.stream_b);

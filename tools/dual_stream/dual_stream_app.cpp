@@ -59,8 +59,7 @@ hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
                                           const hzw::StreamConfig& sc,
                                           bool no_region_filter,
                                           const std::string& business_socket,
-                                          bool enable_business,
-                                          const std::string& jsonl_path) {
+                                          bool enable_business) {
   hzw::PipelineConfig pc;
   pc.stream_id = sc.id;
   pc.input_path = app_cfg.resolve_env(sc.input_url_env);
@@ -72,6 +71,8 @@ hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
   pc.source_fps = 25;  // RTSP 模式不依赖源帧率整除
   pc.output_fps = sc.output_fps;
   pc.inference_fps = sc.inference_fps;
+  pc.output_width = sc.output_width;
+  pc.output_height = sc.output_height;
   pc.bitrate_kbps = sc.bitrate_kbps;
   pc.gop = sc.gop;
   pc.queue_size = app_cfg.frame_queue_size;
@@ -95,7 +96,14 @@ hzw::PipelineConfig build_pipeline_config(const hzw::ApplicationConfig& app_cfg,
   pc.camera_param = sc.camera_param;
   pc.enable_business = enable_business;
   pc.business_socket = business_socket;
-  pc.business_jsonl_path = enable_business ? jsonl_path : "";
+  pc.event_directory = app_cfg.event_directory;
+  pc.event_rotate_size_mb = app_cfg.event_rotate_size_mb;
+  pc.event_rotate_seconds = app_cfg.event_rotate_seconds;
+  pc.event_retention_days = app_cfg.event_retention_days;
+  pc.event_sync_seconds = app_cfg.event_sync_seconds;
+  pc.event_queue_max_mb = app_cfg.event_queue_max_mb;
+  pc.event_disk_warn_mb = app_cfg.event_disk_warn_mb;
+  pc.event_disk_stop_mb = app_cfg.event_disk_stop_mb;
   pc.request_timeout_ms = app_cfg.request_timeout_ms;
 
   if (!no_region_filter && (!sc.forbidden_rectangles.empty() || !sc.forbidden_polygons.empty())) {
@@ -170,9 +178,8 @@ int main(int argc, char** argv) {
                    sc.id.c_str(), sc.output_url_env.c_str());
       return 2;
     }
-    std::string jsonl_path = "/var/lib/hangzhouwan/stream_" + sc.id + "_events.jsonl";
     pipeline_cfgs.push_back(build_pipeline_config(app_cfg, sc, no_region_filter,
-                                                  business_socket, enable_business, jsonl_path));
+                                                  business_socket, enable_business));
   }
 
   if (pipeline_cfgs.empty()) {
@@ -184,6 +191,14 @@ int main(int argc, char** argv) {
   dcfg.max_seconds = max_seconds;
   dcfg.metrics_interval_sec = metrics_interval;
   dcfg.detector_mode = "per_stream";
+  dcfg.health_thresholds.min_output_fps = app_cfg.stream_healthy_fps;
+  dcfg.health_thresholds.min_inference_fps = app_cfg.inference_healthy_fps;
+  dcfg.health_thresholds.frame_stale_ms =
+      static_cast<int64_t>(app_cfg.frame_stale_seconds) * 1000;
+  dcfg.health_thresholds.reconnect_grace_ms =
+      static_cast<int64_t>(app_cfg.stream_failed_seconds) * 1000;
+  dcfg.health_thresholds.max_reconnects_per_hour =
+      app_cfg.reconnects_per_hour;
 
   dcfg.run_a = false;
   dcfg.run_b = false;

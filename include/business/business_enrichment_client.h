@@ -17,6 +17,7 @@
 #ifndef HZW_BUSINESS_BUSINESS_ENRICHMENT_CLIENT_H
 #define HZW_BUSINESS_BUSINESS_ENRICHMENT_CLIENT_H
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ struct BusinessResult {
 };
 
 enum class EnrichmentState {
+  PENDING,
   FULL,
   COORD_ONLY,
   DETECTION_ONLY,
@@ -79,16 +81,22 @@ class BusinessEnrichmentClient {
               std::vector<BusinessResult>& results,
               int timeout_ms = 30);
 
-  EnrichmentState state() const { return state_; }
-  int degrade_count() const { return degrade_count_; }
-  int recover_count() const { return recover_count_; }
+  EnrichmentState state() const { return state_.load(); }
+  int degrade_count() const { return degrade_count_.load(); }
+  int recover_count() const { return recover_count_.load(); }
+  bool link_healthy() const { return link_healthy_.load(); }
+  int64_t timeout_count() const { return timeout_count_.load(); }
+  int64_t error_count() const { return error_count_.load(); }
 
  private:
   int fd_ = -1;
   std::string socket_path_;
-  EnrichmentState state_ = EnrichmentState::DETECTION_ONLY;
-  int degrade_count_ = 0;
-  int recover_count_ = 0;
+  std::atomic<EnrichmentState> state_{EnrichmentState::PENDING};
+  std::atomic<bool> link_healthy_{false};
+  std::atomic<int64_t> timeout_count_{0};
+  std::atomic<int64_t> error_count_{0};
+  std::atomic<int> degrade_count_{0};
+  std::atomic<int> recover_count_{0};
 };
 
 }  // namespace hzw

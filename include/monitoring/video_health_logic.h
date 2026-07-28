@@ -44,15 +44,16 @@ struct StreamHealthInput {
   double output_fps = 0.0;      // 本采样窗口输出帧率
   double inference_fps = 0.0;   // 本采样窗口推理帧率
   bool resource_fatal = false;  // VPU/解码器/编码器资源致命
-  int64_t reconnect_delta = 0;  // 自上次采样以来重连增量（RTSP+RTMP）
+  int64_t reconnects_1h = 0;    // 滑动一小时内重连次数（RTSP+RTMP）
 };
 
 // 健康阈值（集中定义，默认值匹配生产验收；调用方可构造自定义值覆盖）。
 struct HealthThresholds {
   int64_t frame_stale_ms = 15000;       // 超过此值视为 RTSP 断开（最近帧过时）
   int64_t reconnect_grace_ms = 60000;   // 断开宽限期：[stale,grace) 为瞬时重连(DEGRADED)，>=grace 为持续断流(FAILED)
-  double min_output_fps = 5.0;          // 低于此值视为输出降级
-  int64_t reconnect_storm_delta = 3;    // 单采样窗口重连增量超此视为重连风暴
+  double min_output_fps = 7.0;          // 低于此值视为输出降级
+  double min_inference_fps = 4.0;       // 低于此值视为推理降级
+  int64_t max_reconnects_per_hour = 2;  // 滑动一小时重连上限
   int confirm_down = 2;                 // HEALTHY->DEGRADED 需连续确认采样数（防毛刺）
   int confirm_up = 3;                   // 降级->HEALTHY 恢复需连续确认采样数（防抖）
 };
@@ -88,12 +89,22 @@ struct DualHealthResult {
   std::string reason;        // 人类可读原因（供健康接口/日志）
 };
 
+struct BusinessHealthResult {
+  std::string link;  // HEALTHY | FAILED | DISABLED
+  std::string mode;  // PENDING | FULL | COORD_ONLY | DETECTION_ONLY
+  bool link_healthy = true;
+};
+
+BusinessHealthResult compute_business_health(
+    bool enabled_a, bool link_a, const std::string& mode_a,
+    bool enabled_b, bool link_b, const std::string& mode_b);
+
 // 计算双路整体健康（基于已防抖的单路等级）。fatal_a/b 用于区分 resource_fatal 降级类别。
-// business_full=false 表示业务降级为仅检测（无坐标/AIS）。
+// business_link_healthy=false 表示 Sidecar 链路不可用。本帧无目标/PENDING 不降级。
 DualHealthResult compute_dual_status(StreamHealthLevel level_a,
                                      StreamHealthLevel level_b,
                                      bool fatal_a, bool fatal_b,
-                                     bool business_full);
+                                     bool business_link_healthy);
 
 }  // namespace hzw
 

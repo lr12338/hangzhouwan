@@ -80,7 +80,8 @@ class SophonVideoSink {
   bool open(const std::string& path, int width, int height, int fps,
             int bitrate_kbps, int gop, int device,
             const std::string& encoder_name,
-            const std::string& sink_type, std::string& err);
+            const std::string& sink_type, bool input_is_dma,
+            AVPixelFormat input_format, std::string& err);
 
   // 写入一帧（按输出帧序重置 pts）。返回 false 表示不可恢复错误。
   // RTMP 模式下，写入失败会自动尝试重连（退避+重建编码器/muxer），重连成功后重试写入。
@@ -108,7 +109,9 @@ class SophonVideoSink {
 
  private:
   bool open_encoder(int width, int height, int fps, int bitrate_kbps, int gop,
-                    int device, const std::string& encoder_name, std::string& err);
+                    int device, const std::string& encoder_name,
+                    bool input_is_dma, AVPixelFormat input_format,
+                    std::string& err);
   bool open_file_muxer(const std::string& path, std::string& err);
   bool open_rtmp_muxer(const std::string& url, std::string& err);
   // 仅释放 muxer 与 AVIO（保留编码器），用于 RTMP 网络重连。
@@ -153,6 +156,8 @@ class SophonVideoSink {
   int saved_gop_ = 0;
   int saved_device_ = 0;
   std::string saved_encoder_name_;
+  bool saved_input_is_dma_ = true;
+  AVPixelFormat saved_input_format_ = AV_PIX_FMT_NV12;
 
   // 资源致命状态
   std::atomic<bool> resource_fatal_{false};
