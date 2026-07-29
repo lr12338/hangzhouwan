@@ -26,6 +26,8 @@ BUSINESS_SOCKET = "/run/hangzhouwan/business.sock"
 MAINTENANCE_LOCK = "/run/hangzhouwan/maintenance.lock"
 MONITOR_DIR = "/data/hangzhouwan/monitor"
 STATE_PATH = os.path.join(MONITOR_DIR, "supervisor-state.json")
+MAINTENANCE_RECOVERY_STATE = os.path.join(
+    MONITOR_DIR, "maintenance-recovery.json")
 ALERT_PATH = os.path.join(MONITOR_DIR, "alerts.current.jsonl")
 MQTT_SPOOL = os.path.join(MONITOR_DIR, "mqtt-offline.jsonl")
 
@@ -65,9 +67,12 @@ def query_business(timeout=3):
 class RecoveryPolicy:
     """纯策略状态，便于覆盖连续失败、冷却和每日上限单元测试。"""
 
-    def __init__(self, cooldown_seconds=1800, daily_limit=2):
+    def __init__(self, cooldown_seconds=1800, daily_limit=2,
+                 failed_confirmations=3, socket_failure_seconds=90):
         self.cooldown_seconds = cooldown_seconds
         self.daily_limit = daily_limit
+        self.failed_confirmations = failed_confirmations
+        self.socket_failure_seconds = socket_failure_seconds
         self.failed_streak = 0
         self.socket_lost_since = 0
         self.recoveries = collections.deque()
@@ -87,9 +92,10 @@ class RecoveryPolicy:
     def should_recover(self, epoch_seconds):
         socket_failed = (
             self.socket_lost_since
-            and epoch_seconds - self.socket_lost_since >= 90
+            and epoch_seconds - self.socket_lost_since >=
+            self.socket_failure_seconds
         )
-        if self.failed_streak < 3 and not socket_failed:
+        if self.failed_streak < self.failed_confirmations and not socket_failed:
             return False, "failure_not_confirmed"
         if len(self.recoveries) >= self.daily_limit:
             return False, "daily_limit"
@@ -359,10 +365,16 @@ def upstream_reachable(doc):
 def recovery_allowed(doc):
     if os.path.exists(MAINTENANCE_LOCK):
         return False, "maintenance_running"
+    if os.path.exists(MAINTENANCE_RECOVERY_STATE):
+        return False, "maintenance_recovery_pending"
     if not os.path.ismount("/data"):
         return False, "data_not_mounted"
     if shutil.disk_usage("/data").free < 1024 * 1024 * 1024:
         return False, "disk_critical"
+    root_critical_mb = int(
+        doc.get("supervisor", {}).get("root_disk_critical_mb", 1536))
+    if shutil.disk_usage("/").free < root_critical_mb * 1024 * 1024:
+        return False, "root_disk_critical"
     if not upstream_reachable(doc):
         return False, "upstream_unreachable"
     return True, "ok"
@@ -384,6 +396,8 @@ def main():
     policy = RecoveryPolicy(
         int(supervisor_cfg.get("cooldown_seconds", 1800)),
         int(supervisor_cfg.get("daily_recovery_limit", 2)),
+        int(supervisor_cfg.get("failed_confirmations", 3)),
+        int(supervisor_cfg.get("socket_failure_seconds", 90)),
     )
     try:
         with open(STATE_PATH, encoding="utf-8") as stream:
@@ -394,9 +408,27 @@ def main():
     last_mqtt_connected = None
     last_active_alerts = set()
     last_recovery_notice = None
+    last_root_disk_low = None
 
     while True:
         epoch = int(time.time())
+        root_warn_mb = int(supervisor_cfg.get("root_disk_warn_mb", 2048))
+        root_free_mb = shutil.disk_usage("/").free // (1024 * 1024)
+        root_disk_low = root_free_mb < root_warn_mb
+        if root_disk_low != last_root_disk_low:
+            if root_disk_low:
+                record = alerts.emit(
+                    "root_disk_low", "critical",
+                    "根盘余量低于生产告警线",
+                    {"free_mb": root_free_mb, "warn_mb": root_warn_mb})
+                publisher.publish_alert(record)
+            elif last_root_disk_low is True:
+                record = alerts.emit(
+                    "root_disk_recovered", "info",
+                    "根盘余量已恢复",
+                    {"free_mb": root_free_mb, "warn_mb": root_warn_mb})
+                publisher.publish_alert(record)
+        last_root_disk_low = root_disk_low
         health = query_video()
         business_health = query_business()
         socket_ok = health is not None

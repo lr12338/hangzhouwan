@@ -16,6 +16,17 @@ if systemctl is-enabled hangzhouwan-maintenance-restart.timer >/dev/null 2>&1; t
     sudo systemctl disable --now hangzhouwan-maintenance-restart.timer
     echo "  已禁用定时维护"
 fi
+if systemctl is-enabled hangzhouwan-maintenance-recovery.timer >/dev/null 2>&1; then
+    sudo systemctl disable --now hangzhouwan-maintenance-recovery.timer
+    echo "  已禁用维护恢复重试"
+fi
+for worker in hangzhouwan-maintenance-restart.service \
+              hangzhouwan-maintenance-recovery.service; do
+    if systemctl is-active "$worker" >/dev/null 2>&1; then
+        sudo systemctl stop "$worker"
+        echo "  已停止 $worker"
+    fi
+done
 
 # 停止并禁用服务
 for svc in hangzhouwan-supervisor hangzhouwan-video hangzhouwan-business; do
@@ -36,6 +47,8 @@ for unit in \
     hangzhouwan-supervisor.service \
     hangzhouwan-maintenance-restart.service \
     hangzhouwan-maintenance-restart.timer \
+    hangzhouwan-maintenance-recovery.service \
+    hangzhouwan-maintenance-recovery.timer \
     hangzhouwan.target; do
     if [ -f "$SERVICE_DIR/$unit" ]; then
         sudo rm -f "$SERVICE_DIR/$unit"

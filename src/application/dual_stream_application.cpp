@@ -8,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -18,6 +20,34 @@ int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+const char* lifecycle_str(PipelineLifecycle lifecycle) {
+  switch (lifecycle) {
+    case PipelineLifecycle::STARTING: return "STARTING";
+    case PipelineLifecycle::RUNNING: return "RUNNING";
+    case PipelineLifecycle::EXITED: return "EXITED";
+  }
+  return "EXITED";
+}
+
+bool probe_data_storage(const std::string& /*path*/, int64_t& free_bytes,
+                        std::string& error) {
+  struct stat root {};
+  struct stat data {};
+  struct statvfs fs {};
+  if (::stat("/", &root) != 0 || ::stat("/data", &data) != 0 ||
+      !S_ISDIR(data.st_mode) || root.st_dev == data.st_dev) {
+    error = "/data 不是独立挂载点";
+    return false;
+  }
+  if (::statvfs("/data", &fs) != 0) {
+    error = "无法读取事件存储空间";
+    return false;
+  }
+  free_bytes = static_cast<int64_t>(fs.f_bavail) *
+               static_cast<int64_t>(fs.f_frsize);
+  return true;
 }
 
 std::string json_string_value(const std::string& json,
@@ -118,15 +148,15 @@ void DualStreamApplication::stream_thread(const PipelineConfig& cfg,
     std::fprintf(stderr, "错误 | [%s] 线程异常 | %s\n",
                  cfg.stream_id.c_str(), e.what());
     std::fflush(stderr);
-    exit_code.store(99);
+    exit_code.store(kPipelineExitRuntime);
   }
-  // 资源致命（退出码 70）：立即停止双路，禁止错误风暴，进程非零退出。
-  if (exit_code.load() == 70) {
-    std::fprintf(stderr, "致命 | 双路 | [%s] 设备资源致命，停止双路\n", cfg.stream_id.c_str());
+  // 任一已启用流非零退出都停止双路，避免主进程保持 active 而数据面残缺。
+  if (exit_code.load() != 0) {
+    std::fprintf(stderr, "错误 | 双路 | [%s] 管线退出码=%d，停止双路\n",
+                 cfg.stream_id.c_str(), exit_code.load());
     std::fflush(stderr);
     request_stop();
   }
-  // 普通错误不直接杀死另一路；由 metrics_loop 的超时或信号统一停止。
 }
 
 int DualStreamApplication::run(const DualStreamConfig& cfg) {
@@ -136,8 +166,8 @@ int DualStreamApplication::run(const DualStreamConfig& cfg) {
 
   start_ms_ = now_ms();
   stop_.store(false);
-  exit_code_a_.store(0);
-  exit_code_b_.store(0);
+  exit_code_a_.store(cfg.run_a ? -1 : 0);
+  exit_code_b_.store(cfg.run_b ? -1 : 0);
   prev_output_a_ = prev_infer_a_ = prev_output_b_ = prev_infer_b_ = 0;
   prev_reconnect_a_ = prev_reconnect_b_ = 0;
   reconnect_times_a_.clear();
@@ -183,11 +213,17 @@ int DualStreamApplication::run(const DualStreamConfig& cfg) {
   int rc_a = exit_code_a_.load();
   int rc_b = exit_code_b_.load();
   int rc = 0;
-  if (cfg.run_a && rc_a == 70) rc = 70;
-  if (cfg.run_b && rc_b == 70) rc = 70;
-  if (rc != 70) {
-    if (cfg.run_a && rc_a != 0) rc = 1;
-    if (cfg.run_b && rc_b != 0) rc = 1;
+  if ((cfg.run_a && rc_a == kPipelineExitHardware) ||
+      (cfg.run_b && rc_b == kPipelineExitHardware)) {
+    rc = kPipelineExitHardware;
+  } else if ((cfg.run_a && rc_a == kPipelineExitEndpointUnavailable) ||
+             (cfg.run_b && rc_b == kPipelineExitEndpointUnavailable)) {
+    rc = kPipelineExitEndpointUnavailable;
+  } else if ((cfg.run_a && rc_a == kPipelineExitConfiguration) ||
+             (cfg.run_b && rc_b == kPipelineExitConfiguration)) {
+    rc = kPipelineExitConfiguration;
+  } else if ((cfg.run_a && rc_a != 0) || (cfg.run_b && rc_b != 0)) {
+    rc = kPipelineExitRuntime;
   }
   std::fprintf(stdout, "信息 | 双路 | 结束 A退出码=%d B退出码=%d 耗时=%llds\n",
                rc_a, rc_b, static_cast<long long>((now_ms() - start_ms_) / 1000));
@@ -250,7 +286,10 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
         hs.commit = vc.substr(sep + 1);
       }
 
-      // Business 链路与本帧增强结果分离；A/B 两路共同参与聚合。
+      const PipelineLifecycle life_a = pipeline_a_.lifecycle();
+      const PipelineLifecycle life_b = pipeline_b_.lifecycle();
+
+      // Business 链路与流初始化解耦：未进入 RUNNING 的管线不伪造 Sidecar 故障。
       auto bs_a = pipeline_a_.business_state();
       auto bs_b = pipeline_b_.business_state();
       const bool enabled_a = cfg.run_a && cfg.stream_a.enable_business;
@@ -259,11 +298,22 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
           enabled_a ? cfg.stream_a.business_socket : cfg.stream_b.business_socket;
       const bool sidecar_healthy =
           !(enabled_a || enabled_b) || query_sidecar_health(sidecar_socket);
+      const bool participant_a =
+          enabled_a && life_a == PipelineLifecycle::RUNNING;
+      const bool participant_b =
+          enabled_b && life_b == PipelineLifecycle::RUNNING;
       BusinessHealthResult business = compute_business_health(
-          enabled_a, pipeline_a_.business_link_healthy() && sidecar_healthy,
+          participant_a,
+          pipeline_a_.business_link_healthy() && sidecar_healthy,
           enrichment_status_str(bs_a),
-          enabled_b, pipeline_b_.business_link_healthy() && sidecar_healthy,
+          participant_b,
+          pipeline_b_.business_link_healthy() && sidecar_healthy,
           enrichment_status_str(bs_b));
+      if ((enabled_a || enabled_b) && !participant_a && !participant_b) {
+        business.link_healthy = sidecar_healthy;
+        business.link = sidecar_healthy ? "HEALTHY" : "FAILED";
+        business.mode = sidecar_healthy ? "PENDING" : "DETECTION_ONLY";
+      }
       const bool business_link_healthy = business.link_healthy;
       hs.business_link = business.link;
       hs.enrichment_mode = business.mode;
@@ -278,27 +328,27 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       HealthThresholds ht = cfg.health_thresholds;
       const int64_t lr_a = ma.last_read_ms.load();
       const int64_t lr_b = mb.last_read_ms.load();
-      // last_read_ms==0（从未读到帧，启动期）视为未断开，避免启动即判死
-      int64_t disc_a = (lr_a == 0) ? 0 : (now - lr_a);
-      int64_t disc_b = (lr_b == 0) ? 0 : (now - lr_b);
-      bool a_rtsp = disc_a < ht.frame_stale_ms;
-      bool b_rtsp = disc_b < ht.frame_stale_ms;
-      int64_t recon_a = ma.rtsp_reconnects.load() + ma.rtmp_reconnects.load();
-      int64_t recon_b = mb.rtsp_reconnects.load() + mb.rtmp_reconnects.load();
-      const int64_t delta_recon_a = std::max<int64_t>(0, recon_a - prev_reconnect_a_);
-      const int64_t delta_recon_b = std::max<int64_t>(0, recon_b - prev_reconnect_b_);
-      for (int64_t i = 0; i < delta_recon_a; ++i) reconnect_times_a_.push_back(now);
-      for (int64_t i = 0; i < delta_recon_b; ++i) reconnect_times_b_.push_back(now);
-      while (!reconnect_times_a_.empty() &&
-             reconnect_times_a_.front() < now - 3600000) {
-        reconnect_times_a_.pop_front();
-      }
-      while (!reconnect_times_b_.empty() &&
-             reconnect_times_b_.front() < now - 3600000) {
-        reconnect_times_b_.pop_front();
-      }
+      // 从未读到首帧时，以应用启动时间计算有限宽限，禁止永久 STARTING。
+      int64_t disc_a = (lr_a == 0) ? (now - start_ms_) : (now - lr_a);
+      int64_t disc_b = (lr_b == 0) ? (now - start_ms_) : (now - lr_b);
+      bool a_rtsp = lr_a > 0 && disc_a < ht.frame_stale_ms;
+      bool b_rtsp = lr_b > 0 && disc_b < ht.frame_stale_ms;
+      int64_t recon_a = ma.rtsp_reconnect_attempts.load() +
+                        ma.rtmp_reconnect_attempts.load();
+      int64_t recon_b = mb.rtsp_reconnect_attempts.load() +
+                        mb.rtmp_reconnect_attempts.load();
+      update_reconnect_attempt_window(
+          reconnect_times_a_, recon_a, prev_reconnect_a_, now);
+      update_reconnect_attempt_window(
+          reconnect_times_b_, recon_b, prev_reconnect_b_, now);
       StreamHealthInput in_a;
       in_a.disconnected_ms = disc_a;
+      in_a.starting = cfg.run_a && lr_a == 0 &&
+                      life_a != PipelineLifecycle::EXITED &&
+                      disc_a < ht.frame_stale_ms;
+      in_a.thread_failed =
+          cfg.run_a && life_a == PipelineLifecycle::EXITED &&
+          pipeline_a_.pipeline_exit_code() != 0;
       in_a.rtmp_connected = output_progress_a || (fps_out_a > 0);
       in_a.output_fps = fps_out_a;
       in_a.inference_fps = fps_inf_a;
@@ -306,6 +356,12 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       in_a.reconnects_1h = reconnect_times_a_.size();
       StreamHealthInput in_b;
       in_b.disconnected_ms = disc_b;
+      in_b.starting = cfg.run_b && lr_b == 0 &&
+                      life_b != PipelineLifecycle::EXITED &&
+                      disc_b < ht.frame_stale_ms;
+      in_b.thread_failed =
+          cfg.run_b && life_b == PipelineLifecycle::EXITED &&
+          pipeline_b_.pipeline_exit_code() != 0;
       in_b.rtmp_connected = output_progress_b || (fps_out_b > 0);
       in_b.output_fps = fps_out_b;
       in_b.inference_fps = fps_inf_b;
@@ -321,7 +377,8 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       StreamHealthLevel lvl_b = debouncer_b_.update(inst_b, ht.confirm_down, ht.confirm_up);
       DualHealthResult hr = compute_dual_status(lvl_a, lvl_b,
                                                 in_a.resource_fatal, in_b.resource_fatal,
-                                                business_link_healthy);
+                                                business_link_healthy,
+                                                cfg.run_a, cfg.run_b);
       hs.status = hr.status;
       hs.degradation = hr.degradation;
       hs.health_reason = hr.reason;
@@ -334,7 +391,13 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
 
       // A 路快照
       hs.stream_a.stream_id = "A";
-      hs.stream_a.level = level_str(hr.level_a);
+      hs.stream_a.level = cfg.run_a ? level_str(hr.level_a) : "DISABLED";
+      hs.stream_a.lifecycle =
+          cfg.run_a ? lifecycle_str(life_a) : "DISABLED";
+      hs.stream_a.exit_code =
+          cfg.run_a ? pipeline_a_.pipeline_exit_code() : 0;
+      hs.stream_a.failure_stage = pipeline_a_.failure_stage();
+      hs.stream_a.last_error = pipeline_a_.last_error();
       hs.stream_a.rtsp_connected = a_rtsp;
       hs.stream_a.rtmp_connected = output_progress_a || fps_out_a > 0;
       hs.stream_a.output_fps = fps_out_a;
@@ -343,12 +406,34 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       hs.stream_a.rtsp_reconnects = ma.rtsp_reconnects.load();
       hs.stream_a.rtmp_reconnects = ma.rtmp_reconnects.load();
       hs.stream_a.reconnects_1h = reconnect_times_a_.size();
+      hs.stream_a.rtsp_reconnect_attempts =
+          ma.rtsp_reconnect_attempts.load();
+      hs.stream_a.rtsp_reconnect_failures =
+          ma.rtsp_reconnect_failures.load();
+      hs.stream_a.rtmp_reconnect_attempts =
+          ma.rtmp_reconnect_attempts.load();
+      hs.stream_a.rtmp_reconnect_failures =
+          ma.rtmp_reconnect_failures.load();
+      hs.stream_a.reconnect_attempts_1h = reconnect_times_a_.size();
       hs.stream_a.queue_length = pipeline_a_.metrics().queue_length();
+      hs.stream_a.decode_queue_dropped = ma.decode_queue_dropped.load();
+      hs.stream_a.process_queue_dropped = ma.dropped_frames.load();
+      hs.stream_a.source_fps = pipeline_a_.source_fps();
+      hs.stream_a.input_interarrival_p95_ms =
+          ma.interarrival_p95();
+      hs.stream_a.input_interarrival_p99_ms =
+          ma.interarrival_p99();
       hs.stream_a.e2e_p95_ms = pipeline_a_.metrics().e2e_p95();
 
       // B 路快照
       hs.stream_b.stream_id = "B";
-      hs.stream_b.level = level_str(hr.level_b);
+      hs.stream_b.level = cfg.run_b ? level_str(hr.level_b) : "DISABLED";
+      hs.stream_b.lifecycle =
+          cfg.run_b ? lifecycle_str(life_b) : "DISABLED";
+      hs.stream_b.exit_code =
+          cfg.run_b ? pipeline_b_.pipeline_exit_code() : 0;
+      hs.stream_b.failure_stage = pipeline_b_.failure_stage();
+      hs.stream_b.last_error = pipeline_b_.last_error();
       hs.stream_b.rtsp_connected = b_rtsp;
       hs.stream_b.rtmp_connected = output_progress_b || fps_out_b > 0;
       hs.stream_b.output_fps = fps_out_b;
@@ -357,7 +442,23 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       hs.stream_b.rtsp_reconnects = mb.rtsp_reconnects.load();
       hs.stream_b.rtmp_reconnects = mb.rtmp_reconnects.load();
       hs.stream_b.reconnects_1h = reconnect_times_b_.size();
+      hs.stream_b.rtsp_reconnect_attempts =
+          mb.rtsp_reconnect_attempts.load();
+      hs.stream_b.rtsp_reconnect_failures =
+          mb.rtsp_reconnect_failures.load();
+      hs.stream_b.rtmp_reconnect_attempts =
+          mb.rtmp_reconnect_attempts.load();
+      hs.stream_b.rtmp_reconnect_failures =
+          mb.rtmp_reconnect_failures.load();
+      hs.stream_b.reconnect_attempts_1h = reconnect_times_b_.size();
       hs.stream_b.queue_length = pipeline_b_.metrics().queue_length();
+      hs.stream_b.decode_queue_dropped = mb.decode_queue_dropped.load();
+      hs.stream_b.process_queue_dropped = mb.dropped_frames.load();
+      hs.stream_b.source_fps = pipeline_b_.source_fps();
+      hs.stream_b.input_interarrival_p95_ms =
+          mb.interarrival_p95();
+      hs.stream_b.input_interarrival_p99_ms =
+          mb.interarrival_p99();
       hs.stream_b.e2e_p95_ms = pipeline_b_.metrics().e2e_p95();
 
       const auto ew_a = pipeline_a_.event_writer_status();
@@ -374,27 +475,27 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
       };
       copy_writer(ew_a, hs.event_writer_a);
       copy_writer(ew_b, hs.event_writer_b);
+      hs.event_writer_a.state = compute_event_writer_state(
+          cfg.run_a && cfg.stream_a.enable_business &&
+              life_a == PipelineLifecycle::RUNNING,
+          ew_a.running, ew_a.write_enabled, !ew_a.last_error.empty());
+      hs.event_writer_b.state = compute_event_writer_state(
+          cfg.run_b && cfg.stream_b.enable_business &&
+              life_b == PipelineLifecycle::RUNNING,
+          ew_b.running, ew_b.write_enabled, !ew_b.last_error.empty());
       hs.storage.path = cfg.run_a ? cfg.stream_a.event_directory
                                   : cfg.stream_b.event_directory;
-      hs.storage.available =
-          (!cfg.run_a || !cfg.stream_a.enable_business ||
-           ew_a.storage_available) &&
-          (!cfg.run_b || !cfg.stream_b.enable_business ||
-           ew_b.storage_available);
-      hs.storage.free_bytes =
-          (ew_a.free_bytes > 0 && ew_b.free_bytes > 0)
-              ? std::min(ew_a.free_bytes, ew_b.free_bytes)
-              : std::max(ew_a.free_bytes, ew_b.free_bytes);
-      if (!hs.storage.available) hs.storage.state = "UNAVAILABLE";
-      else if ((!cfg.run_a || !cfg.stream_a.enable_business ||
-                ew_a.write_enabled) &&
-               (!cfg.run_b || !cfg.stream_b.enable_business ||
-                ew_b.write_enabled)) {
-        hs.storage.state =
-            (ew_a.low_space_warning || ew_b.low_space_warning) ? "WARNING" : "OK";
-      } else {
-        hs.storage.state = "PROTECTED";
-      }
+      std::string storage_error;
+      hs.storage.available = probe_data_storage(
+          hs.storage.path, hs.storage.free_bytes, storage_error);
+      const int warn_mb = cfg.run_a ? cfg.stream_a.event_disk_warn_mb
+                                    : cfg.stream_b.event_disk_warn_mb;
+      const int stop_mb = cfg.run_a ? cfg.stream_a.event_disk_stop_mb
+                                    : cfg.stream_b.event_disk_stop_mb;
+      hs.storage.state = compute_storage_state(
+          hs.storage.available, hs.storage.free_bytes,
+          static_cast<int64_t>(warn_mb) * 1024 * 1024,
+          static_cast<int64_t>(stop_mb) * 1024 * 1024);
       hs.resource_fatal = in_a.resource_fatal || in_b.resource_fatal;
       if (hs.storage.state != "OK")
         hs.active_alerts.push_back("event_storage_" + hs.storage.state);
@@ -405,6 +506,10 @@ void DualStreamApplication::metrics_loop(const DualStreamConfig& cfg) {
         hs.active_alerts.push_back("business_error");
       if (ew_a.dropped_records > 0 || ew_b.dropped_records > 0)
         hs.active_alerts.push_back("event_writer_dropped");
+      if (hs.event_writer_a.state == "FAILED")
+        hs.active_alerts.push_back("event_writer_A_failed");
+      if (hs.event_writer_b.state == "FAILED")
+        hs.active_alerts.push_back("event_writer_B_failed");
       if (hs.resource_fatal)
         hs.active_alerts.push_back("device_resource_fatal");
       if (in_a.reconnects_1h > ht.max_reconnects_per_hour)

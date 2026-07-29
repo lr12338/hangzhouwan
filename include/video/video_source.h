@@ -69,6 +69,12 @@ class SophonVideoSource {
   int loops_completed() const { return loops_completed_; }
   bool is_rtsp() const { return is_rtsp_; }
   int reconnect_count() const { return reconnect_count_; }
+  int64_t reconnect_attempt_count() const {
+    return reconnect_attempt_count_.load();
+  }
+  int64_t reconnect_failure_count() const {
+    return reconnect_failure_count_.load();
+  }
   // 源 epoch：每次（重）连接成功后 +1；帧携带该值，用于检测重连并清除过期检测结果。
   int source_epoch() const { return source_epoch_; }
 
@@ -135,6 +141,8 @@ class SophonVideoSource {
   RtspSourceOptions rtsp_opts_;
   ReconnectPolicy reconnect_policy_{1000, 30000};
   int reconnect_count_ = 0;
+  std::atomic<int64_t> reconnect_attempt_count_{0};
+  std::atomic<int64_t> reconnect_failure_count_{0};
   int source_epoch_ = 0;
   std::string rtsp_url_;           // 仅内存，禁止打印
 

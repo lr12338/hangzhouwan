@@ -360,7 +360,9 @@ bool SophonVideoSink::reconnect_rtmp(std::string& err) {
       return false;
     }
     // 重建 FLV muxer 并重开 RTMP（复用现有 enc_）
+    rtmp_reconnect_attempt_count_.fetch_add(1);
     if (!open_rtmp_muxer(output_url_, err)) {
+      rtmp_reconnect_failure_count_.fetch_add(1);
       std::fprintf(stdout, "信息 | RTMP重连 | RTMP重连失败：%s\n", err.c_str());
       std::fflush(stdout);
       teardown_muxer();  // 清理半开 muxer，继续退避

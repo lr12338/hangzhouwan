@@ -144,16 +144,24 @@ sudo systemctl stop hangzhouwan-business.service
 1. 获取维护锁，保存诊断，检查 `/data`、网络和上游端口；
 2. 清除限流后重启 Business，并验证 Sidecar；
 3. 重启 Video，连续三次验证 A/B 真实输出和推理；
-4. 180 秒内未完成则告警退出，不循环重启。
+4. 180 秒内未完成则保存诊断、停止 Video/Business 并进入持久恢复状态；
+5. 恢复 timer 每 30 分钟检查一次，RTSP/RTMP 或磁盘门禁失败时不重启，
+   门禁通过后重建 Business/Video，直到连续三次严格健康。
 
 安装并启用：
 
 ```bash
 sudo cp deploy/systemd/hangzhouwan-maintenance-restart.{service,timer} /etc/systemd/system/
+sudo cp deploy/systemd/hangzhouwan-maintenance-recovery.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hangzhouwan-maintenance-restart.timer
-systemctl list-timers hangzhouwan-maintenance-restart.timer
+sudo systemctl enable --now hangzhouwan-maintenance-recovery.timer
+systemctl list-timers 'hangzhouwan-maintenance-*'
 ```
+
+升级该版本前，必须将 `/etc/hangzhouwan/application.yaml` 的
+`health.stream_healthy_fps` 更新为 `9`，并补齐示例中的根盘、恢复间隔和
+诊断保留配置；生产预检会拒绝仍使用 7fps 健康线的配置。
 
 修改执行时间后，执行 `sudo systemctl daemon-reload && sudo systemctl restart
 hangzhouwan-maintenance-restart.timer`。临时手动触发可运行：

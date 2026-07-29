@@ -1,5 +1,5 @@
 [Unit]
-Description=Hangzhou Bay Controlled Maintenance Restart
+Description=Hangzhou Bay Persistent Maintenance Recovery
 Wants=network-online.target
 After=network-online.target
 
@@ -12,8 +12,8 @@ EnvironmentFile=/etc/hangzhouwan/business.env
 EnvironmentFile=/etc/hangzhouwan/video.env
 Environment=PYTHONNOUSERSITE=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/hangzhouwan/current/venv/bin/python3 -m services.monitoring.controlled_maintenance
-TimeoutStartSec=420
+ExecStart=/opt/hangzhouwan/current/venv/bin/python3 -m services.monitoring.maintenance_recovery
+TimeoutStartSec=600
 UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
@@ -23,4 +23,4 @@ ReadWritePaths=/run/hangzhouwan /data/hangzhouwan/monitor
 CapabilityBoundingSet=
 AmbientCapabilities=
 LimitCORE=0
-SyslogIdentifier=hangzhouwan-maintenance
+SyslogIdentifier=hangzhouwan-recovery

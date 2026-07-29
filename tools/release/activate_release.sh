@@ -230,6 +230,15 @@ if ! sudo "$HZWCTL" preflight --release "$RELEASE_DIR" --config "$CONFIG_PATH" -
 fi
 echo "  ✅ 预检通过"
 
+echo "[2.1/10] 检查生产 RTSP/RTMP 端点..."
+if ! sudo "$HZWCTL" upstream-check --config "$CONFIG_PATH" \
+    --environment-file /etc/hangzhouwan/business.env \
+    --environment-file /etc/hangzhouwan/video.env; then
+  echo "  ❌ 上游端点不可达，拒绝切换 Release"
+  exit 4
+fi
+echo "  ✅ 上游端点门禁通过（真实帧仍由激活后的严格健康门禁确认）"
+
 # ---------------------------------------------------------------------------
 # 3. candidate 离线 smoke
 # ---------------------------------------------------------------------------

@@ -153,6 +153,8 @@ bool SophonVideoSource::open_rtsp(const std::string& url, int device,
   loops_completed_ = 0;
   packets_read_ = 0;
   reconnect_count_ = 0;
+  reconnect_attempt_count_.store(0);
+  reconnect_failure_count_.store(0);
   source_epoch_ = 1;
   std::fprintf(stdout, "信息 | 视频解码 | 输入(RTSP)：%s\n", redact_url_credentials(url).c_str());
   std::fprintf(stdout, "信息 | 视频解码 | 解码器：%s 传输：%s stimeout=%lldus extra_frame_buffer_num=%d\n",
@@ -206,6 +208,7 @@ bool SophonVideoSource::reconnect_rtsp(std::string& err) {
       err = "停止";
       return false;
     }
+    reconnect_attempt_count_.fetch_add(1);
     AVDictionary* dict = nullptr;
     av_dict_set(&dict, "rtsp_transport", rtsp_opts_.transport.c_str(), 0);
     if (rtsp_opts_.stimeout_us > 0)
@@ -222,6 +225,7 @@ bool SophonVideoSource::reconnect_rtsp(std::string& err) {
       std::fflush(stdout);
       return true;
     }
+    reconnect_failure_count_.fetch_add(1);
     // 资源致命（VPU/解码器 ENOMEM）立即升级，禁止错误风暴式重试。
     if (resource_fatal_.load()) {
       err = e;

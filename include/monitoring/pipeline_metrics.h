@@ -38,21 +38,50 @@ class PipelineMetrics {
   std::atomic<int64_t> rtmp_write_fail{0};       // RTMP 写入失败数
   std::atomic<int64_t> rtsp_reconnects{0};       // RTSP 重连次数
   std::atomic<int64_t> rtmp_reconnects{0};       // RTMP 重连次数
+  std::atomic<int64_t> rtsp_reconnect_attempts{0};
+  std::atomic<int64_t> rtsp_reconnect_failures{0};
+  std::atomic<int64_t> rtmp_reconnect_attempts{0};
+  std::atomic<int64_t> rtmp_reconnect_failures{0};
   std::atomic<int64_t> last_read_ms{0};          // 最近一次成功读取的墙钟时间（ms）
   std::string stream_id;                           // 流标识（A/B），用于日志前缀
 
   // ===== 计时采样（毫秒）=====
-  void record_read_ms(double v) { push(read_ms_, v); }
-  void record_decode_ms(double v) { push(decode_ms_, v); }
-  void record_vpp_ms(double v) { push(vpp_ms_, v); }
-  void record_normalize_ms(double v) { push(normalize_ms_, v); }
-  void record_pre_ms(double v) { push(pre_ms_, v); }  // 兼容：总预处理（VPP+归一化）
-  void record_infer_ms(double v) { push(infer_ms_, v); }
-  void record_post_ms(double v) { push(post_ms_, v); }
-  void record_region_ms(double v) { push(region_ms_, v); }
-  void record_draw_ms(double v) { push(draw_ms_, v); }
-  void record_encode_ms(double v) { push(encode_ms_, v); }
-  void record_rtmp_ms(double v) { push(rtmp_ms_, v); }
+  void record_read_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(read_ms_, v);
+  }
+  void record_interarrival_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(interarrival_ms_, v);
+  }
+  void record_decode_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(decode_ms_, v);
+  }
+  void record_vpp_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(vpp_ms_, v);
+  }
+  void record_normalize_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(normalize_ms_, v);
+  }
+  void record_pre_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(pre_ms_, v);
+  }
+  void record_infer_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(infer_ms_, v);
+  }
+  void record_post_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(post_ms_, v);
+  }
+  void record_region_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(region_ms_, v);
+  }
+  void record_draw_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(draw_ms_, v);
+  }
+  void record_encode_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(encode_ms_, v);
+  }
+  void record_rtmp_ms(double v) {
+    std::lock_guard<std::mutex> lk(m_); push(rtmp_ms_, v);
+  }
   void record_e2e_ms(double v);
 
   // 设置当前队列长度（供汇总展示）。
@@ -64,6 +93,11 @@ class PipelineMetrics {
   // 健康接口用的 P95 采样（毫秒）。
   double e2e_p95() const { std::lock_guard<std::mutex> lk(m_); return p95(e2e_ms_); }
   double infer_p95() const { std::lock_guard<std::mutex> lk(m_); return p95(infer_ms_); }
+  double interarrival_p95() const {
+    std::lock_guard<std::mutex> lk(m_);
+    return p95(interarrival_ms_);
+  }
+  double interarrival_p99() const;
   int queue_length() const { return queue_len_.load(); }
 
   // 输出一次汇总日志（中文）。
@@ -76,9 +110,11 @@ class PipelineMetrics {
   static void push(std::deque<double>& d, double v);
   static double mean(const std::deque<double>& d);
   static double p95(const std::deque<double>& d);
+  static double percentile(const std::deque<double>& d, double fraction);
 
   mutable std::mutex m_;
-  std::deque<double> read_ms_, decode_ms_, vpp_ms_, normalize_ms_, pre_ms_,
+  std::deque<double> read_ms_, interarrival_ms_, decode_ms_, vpp_ms_,
+      normalize_ms_, pre_ms_,
       infer_ms_, post_ms_, region_ms_, draw_ms_, encode_ms_, rtmp_ms_, e2e_ms_;
   std::atomic<int> queue_len_{0};
   std::atomic<int> jitter_len_{0};

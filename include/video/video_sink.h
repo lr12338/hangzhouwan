@@ -98,6 +98,12 @@ class SophonVideoSink {
   std::string actual_encoder() const { return encoder_name_; }
   std::string sink_type() const { return sink_type_; }
   int rtmp_reconnect_count() const { return rtmp_reconnect_count_; }
+  int64_t rtmp_reconnect_attempt_count() const {
+    return rtmp_reconnect_attempt_count_.load();
+  }
+  int64_t rtmp_reconnect_failure_count() const {
+    return rtmp_reconnect_failure_count_.load();
+  }
 
   // 设备资源致命（编码器 ENOMEM 或初始化失败）。致命后管线必须停止双路并非零退出。
   bool resource_fatal() const { return resource_fatal_.load(); }
@@ -143,6 +149,8 @@ class SophonVideoSink {
   std::atomic<bool> stop_requested_{false};
   RtmpBackoffPolicy rtmp_backoff_;
   int rtmp_reconnect_count_ = 0;
+  std::atomic<int64_t> rtmp_reconnect_attempt_count_{0};
+  std::atomic<int64_t> rtmp_reconnect_failure_count_{0};
   // RTMP 重连日志节流：首次及每 RTMP_LOG_INTERVAL 倍数次输出 1 条，
   // 避免高频重连（~118 行/分钟）撑满 journal。失败/致命始终输出。
   static constexpr int RTMP_LOG_INTERVAL = 10;

@@ -387,6 +387,14 @@ class ActivateReleaseStructureTest(unittest.TestCase):
         self.assertIn("RESULT_CODE=50", self.src)
         self.assertIn("perform_rollback", self.src)
 
+    def test_upstream_gate_runs_before_release_switch(self):
+        """RTSP/RTMP 端点不可达时不得切换 current。"""
+        gate = self.src.index("upstream-check")
+        switch = self.src.index('sudo mv -T "$CURRENT_NEW" "$CURRENT_LINK"')
+        self.assertLess(gate, switch)
+        self.assertIn("--environment-file /etc/hangzhouwan/video.env",
+                      self.src)
+
     def test_pid_verification(self):
         """切换后必须核验 PID 对应的可执行文件来自候选。"""
         self.assertIn("/proc/$pid/exe", self.src)

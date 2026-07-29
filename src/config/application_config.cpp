@@ -593,6 +593,10 @@ bool ApplicationConfig::validate(std::string& err) const {
     err = "health 阈值非法";
     return false;
   }
+  if (prod && stream_healthy_fps < 9) {
+    err = "production health.stream_healthy_fps 必须 >= 9";
+    return false;
+  }
 
   return true;
 }

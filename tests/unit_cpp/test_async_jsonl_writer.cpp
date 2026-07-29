@@ -8,6 +8,7 @@
 #include <zlib.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -55,8 +56,13 @@ void cleanup(const std::string& directory) {
 }  // namespace
 
 int main() {
+  const char* tmpdir = std::getenv("TMPDIR");
+  const std::string writable_data =
+      tmpdir && std::string(tmpdir).compare(0, 6, "/data/") == 0
+          ? std::string(tmpdir)
+          : "/data/hangzhouwan/events";
   const std::string directory =
-      "/data/hangzhouwan/events/test-async-jsonl-" +
+      writable_data + "/test-async-jsonl-" +
       std::to_string(::getpid());
   CHECK(::mkdir(directory.c_str(), 0750) == 0);
   const std::string active = directory + "/stream_A.current.jsonl";

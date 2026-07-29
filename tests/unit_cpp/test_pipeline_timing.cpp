@@ -16,6 +16,19 @@ static int g_failures = 0;
 int main() {
   using hzw::PipelineConfig;
 
+  // 0) 退出码稳定且健康错误不会泄漏 RTSP 凭据。
+  {
+    CHECK(hzw::kPipelineExitRuntime == 1);
+    CHECK(hzw::kPipelineExitHardware == 70);
+    CHECK(hzw::kPipelineExitEndpointUnavailable == 75);
+    CHECK(hzw::kPipelineExitConfiguration == 78);
+    const std::string redacted = hzw::redact_pipeline_error(
+        "open rtsp://camera-user:camera-pass@10.0.0.1/live failed");
+    CHECK(redacted.find("camera-user") == std::string::npos);
+    CHECK(redacted.find("camera-pass") == std::string::npos);
+    CHECK(redacted.find("rtsp://***@10.0.0.1/live") != std::string::npos);
+  }
+
   // 1) 合法配置通过。
   {
     PipelineConfig c;

@@ -130,9 +130,58 @@ SingleStreamPipeline::~SingleStreamPipeline() {
   if (event_writer_) event_writer_->stop();
 }
 
+std::string redact_pipeline_error(const std::string& message) {
+  std::string redacted = message.substr(0, 512);
+  size_t search_from = 0;
+  while (true) {
+    const size_t scheme = redacted.find("://", search_from);
+    if (scheme == std::string::npos) break;
+    const size_t authority = scheme + 3;
+    const size_t authority_end = redacted.find_first_of("/?# ", authority);
+    const size_t at = redacted.find('@', authority);
+    if (at != std::string::npos &&
+        (authority_end == std::string::npos || at < authority_end)) {
+      redacted.replace(authority, at - authority, "***");
+      search_from = authority + 4;
+    } else {
+      search_from = authority;
+    }
+  }
+  return redacted;
+}
+
+void SingleStreamPipeline::set_failure_details(const std::string& stage,
+                                               const std::string& msg) {
+  std::lock_guard<std::mutex> lk(failure_mutex_);
+  failure_stage_ = stage;
+  last_error_ = redact_pipeline_error(msg);
+}
+
+std::string SingleStreamPipeline::failure_stage() const {
+  std::lock_guard<std::mutex> lk(failure_mutex_);
+  return failure_stage_;
+}
+
+std::string SingleStreamPipeline::last_error() const {
+  std::lock_guard<std::mutex> lk(failure_mutex_);
+  return last_error_;
+}
+
+int SingleStreamPipeline::fail_initialization(int code,
+                                              const std::string& stage,
+                                              const std::string& msg) {
+  exit_code_.store(code);
+  set_failure_details(stage, msg);
+  lifecycle_.store(static_cast<int>(PipelineLifecycle::EXITED));
+  std::fprintf(stderr, "错误 | 初始化 | [%s] %s\n", stage.c_str(), msg.c_str());
+  std::fflush(stderr);
+  return code;
+}
+
 void SingleStreamPipeline::set_error(int code, const std::string& msg) {
   if (exit_code_.load() == 0) {
     exit_code_ = code;
+    set_failure_details("runtime", msg);
     std::fprintf(stderr, "错误 | 管线 | %s\n", msg.c_str());
     std::fflush(stderr);
   }
@@ -140,8 +189,9 @@ void SingleStreamPipeline::set_error(int code, const std::string& msg) {
 }
 
 void SingleStreamPipeline::set_resource_fatal(const std::string& msg) {
-  // 资源致命强制覆盖退出码为 70 并停止（资源熔断）。
-  exit_code_.store(70);
+  // 资源致命强制覆盖退出码并停止（资源熔断）。
+  exit_code_.store(kPipelineExitHardware);
+  set_failure_details("device_resource", msg);
   std::fprintf(stderr, "致命 | 管线 | DEVICE_RESOURCE_FATAL: %s\n", msg.c_str());
   std::fflush(stderr);
   request_stop();
@@ -204,10 +254,14 @@ void SingleStreamPipeline::request_stop() {
 
 int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   cfg_ = cfg;
+  stop_.store(false);
+  exit_code_.store(0);
+  lifecycle_.store(static_cast<int>(PipelineLifecycle::STARTING));
+  set_failure_details("", "");
   std::string err;
   if (!cfg_.validate(err)) {
-    std::fprintf(stderr, "错误 | 配置 | %s\n", err.c_str());
-    return 2;
+    return fail_initialization(kPipelineExitConfiguration,
+                               "configuration", err);
   }
 
   metrics_.stream_id = cfg_.stream_id;
@@ -223,8 +277,8 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     } else {
       std::string e;
       if (!resolve_input_env(cfg_.input_env, url, e)) {
-        std::fprintf(stderr, "错误 | RTSP输入 | %s\n", e.c_str());
-        return 3;
+        return fail_initialization(kPipelineExitConfiguration,
+                                   "configuration", e);
       }
     }
     RtspSourceOptions ro;
@@ -234,14 +288,24 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
     ro.initial_backoff_ms = cfg_.rtsp_initial_backoff_ms;
     ro.max_backoff_ms = cfg_.rtsp_max_backoff_ms;
     if (!source_.open_rtsp(url, cfg_.device, cfg_.extra_frame_buffer_num, cfg_.decoder, ro, err)) {
-      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
-      return source_.resource_fatal() ? 70 : 3;
+      return fail_initialization(source_.resource_fatal()
+                                     ? kPipelineExitHardware
+                                     : kPipelineExitEndpointUnavailable,
+                                 source_.resource_fatal()
+                                     ? "device_resource"
+                                     : "rtsp_input",
+                                 err);
     }
   } else {
     source_.set_loop(cfg_.loop);
     if (!source_.open(cfg_.input_path, cfg_.device, cfg_.extra_frame_buffer_num, cfg_.decoder, err)) {
-      std::fprintf(stderr, "错误 | 视频源 | %s\n", err.c_str());
-      return source_.resource_fatal() ? 70 : 3;
+      return fail_initialization(source_.resource_fatal()
+                                     ? kPipelineExitHardware
+                                     : kPipelineExitConfiguration,
+                                 source_.resource_fatal()
+                                     ? "device_resource"
+                                     : "file_input",
+                                 err);
     }
   }
   source_w_ = source_.width();
@@ -249,8 +313,9 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
 
   detector_ = std::make_unique<BmrtDetector>(cfg_.device, cfg_.bmodel_path);
   if (!detector_ || !detector_->ok()) {
-    std::fprintf(stderr, "错误 | 模型 | %s\n", detector_ ? detector_->last_error().c_str() : "分配失败");
-    return 4;
+    return fail_initialization(
+        kPipelineExitConfiguration, "model",
+        detector_ ? detector_->last_error() : "分配失败");
   }
   std::fprintf(stdout, "信息 | 模型 | 网络=%s 输入=%s 输出=%s\n",
                detector_->net_name().c_str(), detector_->input_name().c_str(),
@@ -285,17 +350,25 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   }
 
   if (resize_output && !bmcv_.ready()) {
-    std::fprintf(stderr,
-                 "错误 | 视频输出 | 输出缩放要求 BMCV 可用，禁止静默回退源分辨率\n");
-    return 5;
+    return fail_initialization(
+        kPipelineExitConfiguration, "bmcv",
+        "输出缩放要求 BMCV 可用，禁止静默回退源分辨率");
   }
   if (!sink_.open(cfg_.output_path, cfg_.output_width, cfg_.output_height,
                   cfg_.output_fps,
                   cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder,
                   cfg_.sink_type, true,
                   resize_output ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_NV12, err)) {
-    std::fprintf(stderr, "错误 | 视频输出 | %s\n", err.c_str());
-    return sink_.resource_fatal() ? 70 : 5;
+    return fail_initialization(
+        sink_.resource_fatal()
+            ? kPipelineExitHardware
+            : (cfg_.sink_type == "rtmp"
+                   ? kPipelineExitEndpointUnavailable
+                   : kPipelineExitConfiguration),
+        sink_.resource_fatal()
+            ? "device_resource"
+            : (cfg_.sink_type == "rtmp" ? "rtmp_output" : "file_output"),
+        err);
   }
 
   // 业务增强初始化
@@ -366,12 +439,23 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
 
   metrics_.rtsp_reconnects.store(source_.reconnect_count());
   metrics_.rtmp_reconnects.store(sink_.rtmp_reconnect_count());
+  metrics_.rtsp_reconnect_attempts.store(
+      source_.reconnect_attempt_count());
+  metrics_.rtsp_reconnect_failures.store(
+      source_.reconnect_failure_count());
+  metrics_.rtmp_reconnect_attempts.store(
+      sink_.rtmp_reconnect_attempt_count());
+  metrics_.rtmp_reconnect_failures.store(
+      sink_.rtmp_reconnect_failure_count());
 
-  if (resource_fatal() && exit_code_.load() != 70) exit_code_.store(70);
+  if (resource_fatal() && exit_code_.load() != kPipelineExitHardware) {
+    exit_code_.store(kPipelineExitHardware);
+  }
 
   sink_.close();
   source_.close();
   if (event_writer_) event_writer_->stop();
+  lifecycle_.store(static_cast<int>(PipelineLifecycle::EXITED));
 
   std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
   std::fprintf(stdout, "信息 | 结束 | 输出帧=%lld 编码器=%s 容器=%s sink=%s RTSP重连=%d RTMP重连=%d 退出码=%d\n",
@@ -419,9 +503,15 @@ void SingleStreamPipeline::capture_loop(const PipelineConfig& cfg) {
       break;
     }
     metrics_.read_success.fetch_add(1);
+    lifecycle_.store(static_cast<int>(PipelineLifecycle::RUNNING));
     metrics_.decoded_frames.fetch_add(1);
     metrics_.read_frames.store(source_.packets_read());
-    metrics_.last_read_ms.store(now_ms());
+    const int64_t read_at = now_ms();
+    const int64_t previous_read = metrics_.last_read_ms.exchange(read_at);
+    if (previous_read > 0 && read_at >= previous_read) {
+      metrics_.record_interarrival_ms(
+          static_cast<double>(read_at - previous_read));
+    }
     metrics_.record_read_ms(ms_between(read_start, now_ms()));
 
     // RTSP epoch 变化（重连）：清除过期缓冲帧
@@ -897,6 +987,14 @@ void SingleStreamPipeline::metrics_loop(const PipelineConfig& cfg) {
     }
     metrics_.rtsp_reconnects.store(source_.reconnect_count());
     metrics_.rtmp_reconnects.store(sink_.rtmp_reconnect_count());
+    metrics_.rtsp_reconnect_attempts.store(
+        source_.reconnect_attempt_count());
+    metrics_.rtsp_reconnect_failures.store(
+        source_.reconnect_failure_count());
+    metrics_.rtmp_reconnect_attempts.store(
+        sink_.rtmp_reconnect_attempt_count());
+    metrics_.rtmp_reconnect_failures.store(
+        sink_.rtmp_reconnect_failure_count());
     std::fprintf(stdout, "%s\n", metrics_.summary().c_str());
     std::fflush(stdout);
     if (cfg.max_seconds > 0 && (now_ms() - start_ms_) / 1000 >= cfg.max_seconds) {

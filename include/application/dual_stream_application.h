@@ -3,7 +3,7 @@
 // DualStreamApplication：A/B 双路并发视频推理应用（阶段4.4）。
 //
 // 管理 two SingleStreamPipeline 实例，各自独立 RTSP/RTMP/推理/编码线程。
-// 全局 SIGINT/SIGTERM 同时停止两路；任一路失败不杀另一路。
+// 全局 SIGINT/SIGTERM 同时停止两路；任一已启用流非零退出时收口整个进程。
 // 每路拥有独立 metrics、snapshot 和 source/sink epoch。
 // 日志带 stream_id=A|B 前缀。
 //

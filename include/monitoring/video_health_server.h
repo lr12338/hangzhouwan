@@ -30,6 +30,10 @@ namespace hzw {
 struct StreamHealthSnapshot {
   std::string stream_id;
   std::string level = "HEALTHY";  // 单路 HEALTHY|DEGRADED|FAILED
+  std::string lifecycle = "STARTING";  // STARTING|RUNNING|EXITED
+  int exit_code = 0;
+  std::string failure_stage;
+  std::string last_error;
   bool rtsp_connected = false;
   bool rtmp_connected = false;
   double output_fps = 0.0;
@@ -38,11 +42,22 @@ struct StreamHealthSnapshot {
   int64_t rtsp_reconnects = 0;
   int64_t rtmp_reconnects = 0;
   int64_t reconnects_1h = 0;
+  int64_t rtsp_reconnect_attempts = 0;
+  int64_t rtsp_reconnect_failures = 0;
+  int64_t rtmp_reconnect_attempts = 0;
+  int64_t rtmp_reconnect_failures = 0;
+  int64_t reconnect_attempts_1h = 0;
   int queue_length = 0;
+  int64_t decode_queue_dropped = 0;
+  int64_t process_queue_dropped = 0;
+  int source_fps = 0;
+  double input_interarrival_p95_ms = 0.0;
+  double input_interarrival_p99_ms = 0.0;
   double e2e_p95_ms = 0.0;
 };
 
 struct EventWriterHealthSnapshot {
+  std::string state = "NOT_STARTED";
   bool running = false;
   bool write_enabled = false;
   bool low_space_warning = false;
@@ -64,7 +79,7 @@ struct VideoHealthState {
   std::string release;
   std::string version;
   std::string commit;
-  std::string status = "UNKNOWN";       // HEALTHY | DEGRADED | FAILED
+  std::string status = "UNKNOWN";       // STARTING | HEALTHY | DEGRADED | FAILED
   std::string business_state = "UNKNOWN"; // FULL | COORD_ONLY | DETECTION_ONLY
   std::string business_link = "UNKNOWN";  // HEALTHY | FAILED | DISABLED
   std::string enrichment_mode = "PENDING"; // PENDING | FULL | COORD_ONLY | DETECTION_ONLY

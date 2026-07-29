@@ -131,9 +131,12 @@ class TargetTest(unittest.TestCase):
     def setUp(self):
         self.content = read_unit("hangzhouwan.target")
 
-    def test_requires_both_services(self):
+    def test_wants_services_without_reverse_stop_propagation(self):
+        self.assertNotIn("Requires=", self.content)
+        self.assertIn("Wants=", self.content)
         self.assertIn("hangzhouwan-business.service", self.content)
         self.assertIn("hangzhouwan-video.service", self.content)
+        self.assertIn("hangzhouwan-supervisor.service", self.content)
 
 
 class SupervisorServiceTest(unittest.TestCase):
@@ -194,14 +197,38 @@ class MaintenanceRestartTest(unittest.TestCase):
         self.assertLess(wait_business, video)
         self.assertLess(video, wait_video)
 
+    def test_timeout_allows_failure_diagnostics_and_cleanup(self):
+        self.assertIn("TimeoutStartSec=420", self.service)
+
+
+class MaintenanceRecoveryTest(unittest.TestCase):
+    def setUp(self):
+        self.service = read_unit(
+            "hangzhouwan-maintenance-recovery.service")
+        self.timer = read_unit("hangzhouwan-maintenance-recovery.timer")
+        self.target = read_unit("hangzhouwan.target")
+
+    def test_timer_retries_every_thirty_minutes_and_persists(self):
+        self.assertIn("OnUnitInactiveSec=30min", self.timer)
+        self.assertIn("Persistent=true", self.timer)
+
+    def test_worker_keeps_supervisor_alive(self):
+        self.assertIn(
+            "-m services.monitoring.maintenance_recovery", self.service)
+        self.assertNotIn("hangzhouwan-supervisor.service", self.service)
+        self.assertIn("TimeoutStartSec=600", self.service)
+
+    def test_target_starts_recovery_timer(self):
+        self.assertIn("hangzhouwan-maintenance-recovery.timer", self.target)
+
 
 class RestartStormPreventionTest(unittest.TestCase):
     """资源致命退出码 70 触发 systemd 恢复，且配置防止高频重启风暴。
 
     依据：
     - Restart=on-failure：非零退出（含 70）视为失败并重启。
-    - SuccessExitStatus/RestartPreventExitStatus 为空：70 既非成功也未被排除，
-      故退出码 70 必然触发 on-failure 重启。
+    - Video 仅阻止外部依赖/配置退出码 75/78；70 未被排除，
+      故退出码 70 仍触发 on-failure 重启。
     - StartLimitBurst<=5 + StartLimitIntervalSec<=300：限流窗口内最多 5 次重启，
       超限后 systemd 进入 start-limit-hit（failed），需监督器判断，
       避免资源致命（VPU 耗尽）时形成无限高频重启风暴。
@@ -225,10 +252,9 @@ class RestartStormPreventionTest(unittest.TestCase):
             self.assertNotIn("SuccessExitStatus", content,
                              f"{name} 不应声明 SuccessExitStatus，否则 70 可能被误判为成功")
 
-    def test_no_restart_prevent_exit_status(self):
-        for name, content in self._both():
-            self.assertNotIn("RestartPreventExitStatus", content,
-                             f"{name} 不应声明 RestartPreventExitStatus")
+    def test_video_prevents_blind_restart_for_external_or_config_error(self):
+        self.assertIn("RestartPreventExitStatus=75 78", self.video)
+        self.assertNotIn("RestartPreventExitStatus", self.business)
 
     def test_start_limit_prevents_storm(self):
         import re
@@ -256,8 +282,10 @@ class RestartStormPreventionTest(unittest.TestCase):
         for name, content in self._both():
             self.assertIn("Restart=on-failure", content)
             self.assertNotIn("SuccessExitStatus", content)
-            self.assertNotIn("RestartPreventExitStatus", content)
-            self.assertNotEqual(70, 0)
+            if "RestartPreventExitStatus" in content:
+                prevented = content.split(
+                    "RestartPreventExitStatus=", 1)[1].splitlines()[0]
+                self.assertNotIn("70", prevented.split())
 
 
 if __name__ == "__main__":

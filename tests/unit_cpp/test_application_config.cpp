@@ -285,6 +285,39 @@ streams:
   CHECK(err.find("extra_frame_buffer_num") != std::string::npos);
 }
 
+static void test_production_requires_industrial_health_fps() {
+  const char* yaml = R"(
+application:
+  environment: production
+inference:
+  model_path: "/opt/m.bmodel"
+health:
+  stream_healthy_fps: 7
+streams:
+  - id: A
+    enabled: true
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    coordinate_model: "/opt/a.pkl"
+    output_width: 1280
+    output_height: 720
+    output_fps: 10
+    inference_fps: 5
+    output_bitrate_kbps: 1200
+    gop: 20
+business:
+  coordinate_mode: sklearn
+  socket_path: "/run/hangzhouwan/business.sock"
+)";
+  YamlValue root;
+  std::string err;
+  parse_yaml(yaml, root, err);
+  ApplicationConfig cfg;
+  bool ok = cfg.from_yaml(root, err);
+  CHECK(!ok);
+  CHECK(err.find("stream_healthy_fps") != std::string::npos);
+}
+
 int main() {
   test_yaml_parser();
   test_config_load();
@@ -292,6 +325,7 @@ int main() {
   test_production_missing_model();
   test_production_rejects_old_output_spec();
   test_extra_frame_buffer_num();
+  test_production_requires_industrial_health_fps();
   if (failures == 0) {
     std::printf("OK application_config: all tests passed\n");
     return 0;

@@ -22,6 +22,7 @@ ExecStart=/opt/hangzhouwan/current/bin/dual_stream_app \
   --enable-business \
   --business-socket /run/hangzhouwan/business.sock
 Restart=on-failure
+RestartPreventExitStatus=75 78
 RestartSec=60
 LimitNOFILE=8192
 LimitCORE=0

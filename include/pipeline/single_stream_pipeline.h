@@ -41,6 +41,17 @@
 
 namespace hzw {
 
+enum class PipelineLifecycle { STARTING = 0, RUNNING = 1, EXITED = 2 };
+
+// 稳定进程退出分类。systemd 与 Supervisor 依赖这些值，禁止散落魔法数字。
+constexpr int kPipelineExitRuntime = 1;
+constexpr int kPipelineExitHardware = 70;
+constexpr int kPipelineExitEndpointUnavailable = 75;
+constexpr int kPipelineExitConfiguration = 78;
+
+// 健康接口只公开脱敏、限长后的错误文本。
+std::string redact_pipeline_error(const std::string& message);
+
 struct PipelineConfig {
   std::string input_path;
   std::string output_path;
@@ -115,6 +126,13 @@ class SingleStreamPipeline {
   void request_stop();
 
   const PipelineMetrics& metrics() const { return metrics_; }
+  PipelineLifecycle lifecycle() const {
+    return static_cast<PipelineLifecycle>(lifecycle_.load());
+  }
+  int pipeline_exit_code() const { return exit_code_.load(); }
+  std::string failure_stage() const;
+  std::string last_error() const;
+  int source_fps() const { return source_.fps(); }
 
   // 设备资源致命（源或编码器 VPU ENOMEM/初始化失败）。致命时退出码=70。
   bool resource_fatal() const;
@@ -174,6 +192,11 @@ class SingleStreamPipeline {
   bool capture_done_ = false;
   std::atomic<bool> stop_{false};
   std::atomic<int> exit_code_{0};
+  std::atomic<int> lifecycle_{
+      static_cast<int>(PipelineLifecycle::STARTING)};
+  mutable std::mutex failure_mutex_;
+  std::string failure_stage_;
+  std::string last_error_;
   std::atomic<bool> rtsp_draining_{false};  // RTSP 重连前快速排空缓冲
   int source_w_ = 0;
   int source_h_ = 0;
@@ -183,6 +206,10 @@ class SingleStreamPipeline {
   int64_t last_output_ms_ = 0;   // 上次输出帧的墙钟时间
   int64_t last_infer_ms_ = 0;    // 上次推理的墙钟时间
   void set_error(int code, const std::string& msg);
+  int fail_initialization(int code, const std::string& stage,
+                          const std::string& msg);
+  void set_failure_details(const std::string& stage,
+                           const std::string& msg);
   // 资源致命：强制设置退出码 70 并停止（覆盖先前非致命错误码），停止双路。
   void set_resource_fatal(const std::string& msg);
   // RTSP 重连协调：清空 jitter/decode/encode 队列、等待在途帧归零后调用源重连。

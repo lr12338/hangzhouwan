@@ -35,6 +35,10 @@ std::string stream_to_json(const std::string& key, const StreamHealthSnapshot& s
   oss << "\"" << key << "\":{"
       << "\"stream_id\":\"" << escape_json(s.stream_id) << "\""
       << ",\"level\":\"" << escape_json(s.level) << "\""
+      << ",\"lifecycle\":\"" << escape_json(s.lifecycle) << "\""
+      << ",\"exit_code\":" << s.exit_code
+      << ",\"failure_stage\":\"" << escape_json(s.failure_stage) << "\""
+      << ",\"last_error\":\"" << escape_json(s.last_error) << "\""
       << ",\"rtsp_connected\":" << (s.rtsp_connected ? "true" : "false")
       << ",\"rtmp_connected\":" << (s.rtmp_connected ? "true" : "false")
       << ",\"output_fps\":" << s.output_fps
@@ -43,7 +47,17 @@ std::string stream_to_json(const std::string& key, const StreamHealthSnapshot& s
       << ",\"rtsp_reconnects\":" << s.rtsp_reconnects
       << ",\"rtmp_reconnects\":" << s.rtmp_reconnects
       << ",\"reconnects_1h\":" << s.reconnects_1h
+      << ",\"rtsp_reconnect_attempts\":" << s.rtsp_reconnect_attempts
+      << ",\"rtsp_reconnect_failures\":" << s.rtsp_reconnect_failures
+      << ",\"rtmp_reconnect_attempts\":" << s.rtmp_reconnect_attempts
+      << ",\"rtmp_reconnect_failures\":" << s.rtmp_reconnect_failures
+      << ",\"reconnect_attempts_1h\":" << s.reconnect_attempts_1h
       << ",\"queue_length\":" << s.queue_length
+      << ",\"decode_queue_dropped\":" << s.decode_queue_dropped
+      << ",\"process_queue_dropped\":" << s.process_queue_dropped
+      << ",\"source_fps\":" << s.source_fps
+      << ",\"input_interarrival_p95_ms\":" << s.input_interarrival_p95_ms
+      << ",\"input_interarrival_p99_ms\":" << s.input_interarrival_p99_ms
       << ",\"e2e_p95_ms\":" << s.e2e_p95_ms
       << "}";
   return oss.str();
@@ -53,7 +67,8 @@ std::string event_writer_to_json(const std::string& key,
                                  const EventWriterHealthSnapshot& s) {
   std::ostringstream oss;
   oss << "\"" << key << "\":{"
-      << "\"running\":" << (s.running ? "true" : "false")
+      << "\"state\":\"" << escape_json(s.state) << "\""
+      << ",\"running\":" << (s.running ? "true" : "false")
       << ",\"write_enabled\":" << (s.write_enabled ? "true" : "false")
       << ",\"low_space_warning\":" << (s.low_space_warning ? "true" : "false")
       << ",\"queued_bytes\":" << s.queued_bytes

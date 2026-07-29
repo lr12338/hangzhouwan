@@ -110,7 +110,7 @@ mqtt:
 
 health:
   check_interval_seconds: 10
-  stream_healthy_fps: 7
+  stream_healthy_fps: 9
   stream_degraded_fps: 5
   inference_healthy_fps: 4
   frame_stale_seconds: 15
@@ -133,6 +133,12 @@ supervisor:
   socket_failure_seconds: 90
   cooldown_seconds: 1800
   daily_recovery_limit: 2
+  root_disk_warn_mb: 2048
+  root_disk_critical_mb: 1536
+  recovery_retry_seconds: 1800
+  recovery_alert_repeat_seconds: 21600
+  diagnostics_retention_days: 7
+  diagnostics_max_mb: 500
 
 logging:
   video_log_max_size_mb: 50

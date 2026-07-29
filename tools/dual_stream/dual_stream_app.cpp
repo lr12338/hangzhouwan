@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
   std::string cfg_err;
   if (!app_cfg.load(config_path, cfg_err)) {
     std::fprintf(stderr, "致命 | 配置 | 加载失败: %s\n", cfg_err.c_str());
-    return 3;
+    return hzw::kPipelineExitConfiguration;
   }
   std::fprintf(stdout, "信息 | 配置 | 已加载 %s environment=%s bmodel=%s coordinate_mode=%s\n",
                config_path.c_str(), app_cfg.environment.c_str(),
@@ -171,12 +171,12 @@ int main(int argc, char** argv) {
     if (input_url.empty()) {
       std::fprintf(stderr, "错误 | 配置 | 流 %s 环境变量 %s 未设置\n",
                    sc.id.c_str(), sc.input_url_env.c_str());
-      return 2;
+      return hzw::kPipelineExitConfiguration;
     }
     if (output_url.empty()) {
       std::fprintf(stderr, "错误 | 配置 | 流 %s 环境变量 %s 未设置\n",
                    sc.id.c_str(), sc.output_url_env.c_str());
-      return 2;
+      return hzw::kPipelineExitConfiguration;
     }
     pipeline_cfgs.push_back(build_pipeline_config(app_cfg, sc, no_region_filter,
                                                   business_socket, enable_business));
@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
 
   if (pipeline_cfgs.empty()) {
     std::fprintf(stderr, "致命 | 配置 | 没有启用的流\n");
-    return 4;
+    return hzw::kPipelineExitConfiguration;
   }
 
   hzw::DualStreamConfig dcfg;

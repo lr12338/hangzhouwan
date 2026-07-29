@@ -16,6 +16,13 @@ from .supervisor import (
     load_config,
     upstream_reachable,
 )
+from .maintenance_recovery import (
+    arm_recovery_timer,
+    collect_diagnostics,
+    reset_failed,
+    schedule_recovery,
+    stop_services,
+)
 
 LOCK_PATH = "/run/hangzhouwan/maintenance.lock"
 HZWCTL = "/opt/hangzhouwan/current/bin/hzwctl"
@@ -32,7 +39,8 @@ def video_runtime_seconds():
         capture_output=True, text=True, timeout=5, check=False)
     try:
         active_us = int(result.stdout.strip())
-        uptime_s = float(open("/proc/uptime", encoding="ascii").read().split()[0])
+        with open("/proc/uptime", encoding="ascii") as stream:
+            uptime_s = float(stream.read().split()[0])
         return max(0, uptime_s - active_us / 1000000.0)
     except Exception:
         return 0
@@ -57,8 +65,10 @@ def main():
         publisher.publish_alert(record)
 
     started = time.monotonic()
+    mutation_started = False
     try:
-        uptime = float(open("/proc/uptime", encoding="ascii").read().split()[0])
+        with open("/proc/uptime", encoding="ascii") as stream:
+            uptime = float(stream.read().split()[0])
         if uptime < 1800 or video_runtime_seconds() < 1800:
             emit("daily_maintenance_skipped", "info",
                  "开机或 Video 运行不足30分钟，跳过补执行")
@@ -67,6 +77,11 @@ def main():
             raise RuntimeError("/data 未挂载")
         if shutil.disk_usage("/data").free < 2 * 1024 * 1024 * 1024:
             raise RuntimeError("/data 可用空间不足2GB")
+        root_critical_mb = int(
+            doc.get("supervisor", {}).get("root_disk_critical_mb", 1536))
+        if shutil.disk_usage("/").free < root_critical_mb * 1024 * 1024:
+            raise RuntimeError(
+                f"根盘可用空间不足{root_critical_mb}MB")
         if not upstream_reachable(doc):
             raise RuntimeError("上游 RTSP/RTMP 端口不可达")
 
@@ -77,6 +92,7 @@ def main():
         subprocess.run(["systemctl", "reset-failed",
                         "hangzhouwan-business.service",
                         "hangzhouwan-video.service"], timeout=10, check=False)
+        mutation_started = True
         if not run(["systemctl", "restart",
                     "hangzhouwan-business.service"], 30):
             raise RuntimeError("Business 重启失败")
@@ -99,8 +115,28 @@ def main():
              {"duration_seconds": int(time.monotonic() - started)})
         return 0
     except Exception as exc:
+        recovery_details = {
+            "duration_seconds": int(time.monotonic() - started),
+        }
+        post_diagnostic = collect_diagnostics(
+            "maintenance_post" if mutation_started
+            else "maintenance_gate_failed")
+        if post_diagnostic:
+            recovery_details["post_diagnostic"] = post_diagnostic
+        if mutation_started:
+            stopped_cleanly = stop_services()
+            reset_failed()
+            recovery_details["stopped_cleanly"] = stopped_cleanly
+            stopped_diagnostic = collect_diagnostics("maintenance_stopped")
+            if stopped_diagnostic:
+                recovery_details["stopped_diagnostic"] = stopped_diagnostic
+        # 门禁失败也保留待恢复状态，但不得因此停止仍在运行的数据面。
+        # /data 未挂载时不能把状态回退写入根盘，只发布本轮告警。
+        if os.path.ismount("/data"):
+            schedule_recovery(str(exc), recovery_details)
+            arm_recovery_timer()
         emit("daily_maintenance_failed", "critical", str(exc),
-             {"duration_seconds": int(time.monotonic() - started)})
+             recovery_details)
         return 1
     finally:
         try:

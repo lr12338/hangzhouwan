@@ -57,9 +57,9 @@ hzwctl health
 | TPU 内存 | `bm-smi` 或 `cat /sys/kernel/debug/bm1684/memory_usage` | 无持续增长 |
 | FD | `ls /proc/$(pgrep dual_stream_app)/fd \| wc -l` | <100，无增长 |
 | 线程 | `ps -o nlwp $(pgrep dual_stream_app)` | 稳定 |
-| 磁盘 | `df -h / /opt` | 根分区 >1G，/opt >500MB |
+| 磁盘 | `df -h / /data` | 根分区目标≥2GB，且不得低于1.5GB启动门禁 |
 | 日志轮转 | `ls -la /var/log/hangzhouwan/` | 轮转生效 |
-| JSONL | `python3 -c "import json; [json.loads(l) for l in open('/var/lib/hangzhouwan/stream_A_events.jsonl')]"` | 全部合法 |
+| JSONL | 对 `/data/hangzhouwan/events` 中当前 A/B JSONL 逐行执行 `json.loads` | 全部合法 |
 | AIS 缓存 | `hzwctl health` | >0（upAIS/# 通配符订阅） |
 | A/B fps | `hzwctl status` | A≥9fps, B≥9fps（双路均 10fps 目标） |
 | RTSP 重连 | journalctl 日志 | 无频繁重连 |
@@ -109,6 +109,14 @@ sudo systemctl stop hangzhouwan.target
 - 降级恢复至少验证 3 次
 - 诊断报告无异常
 - **此级别通过后才可进入 Windows 灰度替换**
+
+### 生产签收（72 小时）
+- 仅在候选版本已经通过 L4 24 小时观察后开始
+- A/B 平均输出均 ≥9fps，推理均 ≥4fps
+- A/B 端到端 P95 均 <500ms
+- 每路 RTSP+RTMP 重连尝试均 ≤2 次/小时
+- RSS、TPU 内存、FD、线程及根盘余量无持续增长
+- 任一必需流出现持续 FAILED、维护恢复未清除或根盘跌破 1.5GB，签收失败
 
 ---
 

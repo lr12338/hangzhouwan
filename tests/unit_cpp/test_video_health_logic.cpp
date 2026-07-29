@@ -25,6 +25,26 @@ int main() {
   connected.output_fps = 10.0;
   connected.inference_fps = 5.0;
 
+  // ---- 0) 有限启动宽限与线程退出 ----
+  {
+    StreamHealthInput s = connected;
+    s.starting = true;
+    s.output_fps = 0;
+    s.inference_fps = 0;
+    s.rtmp_connected = false;
+    CHECK(compute_stream_level(s, t) == StreamHealthLevel::STARTING);
+    s.starting = false;
+    s.thread_failed = true;
+    CHECK(compute_stream_level(s, t) == StreamHealthLevel::FAILED);
+    StreamHealthDebouncer db;
+    CHECK(db.update(StreamHealthLevel::STARTING,
+                    t.confirm_down, t.confirm_up) ==
+          StreamHealthLevel::STARTING);
+    CHECK(db.update(StreamHealthLevel::DEGRADED,
+                    t.confirm_down, t.confirm_up) ==
+          StreamHealthLevel::DEGRADED);
+  }
+
   // ---- 1) 资源致命 -> FAILED（最高优先级）----
   {
     StreamHealthInput s = connected;
@@ -85,14 +105,22 @@ int main() {
     CHECK(compute_stream_level(connected, t) == StreamHealthLevel::HEALTHY);
   }
 
-  // ---- 9) 单路 FAILED、另一路正常 -> 整体 DEGRADED，突出故障流 ----
+  // ---- 9) 任一必需流 FAILED -> 整体 FAILED ----
   {
     auto r = compute_dual_status(StreamHealthLevel::HEALTHY, StreamHealthLevel::FAILED,
                                  false, false, true);
-    CHECK(r.status == "DEGRADED");
+    CHECK(r.status == "FAILED");
     CHECK(r.degradation == "stream_down");
     CHECK(r.level_a == StreamHealthLevel::HEALTHY);
     CHECK(r.level_b == StreamHealthLevel::FAILED);
+  }
+
+  // 禁用流不参与聚合。
+  {
+    auto r = compute_dual_status(StreamHealthLevel::HEALTHY,
+                                 StreamHealthLevel::FAILED,
+                                 false, false, true, true, false);
+    CHECK(r.status == "HEALTHY");
   }
 
   // ---- 10) 双路 FAILED -> 整体 FAILED ----
@@ -182,6 +210,41 @@ int main() {
                                 true, false, "DETECTION_ONLY");
     CHECK(b.link == "FAILED");
     CHECK(!b.link_healthy);
+    // 未初始化的 B 不参与聚合，不能伪造 Sidecar 故障。
+    b = compute_business_health(true, true, "FULL",
+                                false, false, "DETECTION_ONLY");
+    CHECK(b.link == "HEALTHY");
+    CHECK(b.link_healthy);
+  }
+
+  // ---- 19) 一小时门禁统计全部尝试（含失败），并正确淘汰旧样本 ----
+  {
+    std::deque<int64_t> attempts;
+    int64_t previous = 0;
+    CHECK(update_reconnect_attempt_window(
+              attempts, 3, previous, 1000) == 3);
+    CHECK(update_reconnect_attempt_window(
+              attempts, 4, previous, 1000 + 3599999) == 4);
+    CHECK(update_reconnect_attempt_window(
+              attempts, 4, previous, 1000 + 3600001) == 1);
+  }
+
+  // ---- 20) /data 状态与 Writer 生命周期解耦 ----
+  {
+    CHECK(compute_event_writer_state(
+              false, false, false, false) == "NOT_STARTED");
+    CHECK(compute_event_writer_state(
+              true, false, false, false) == "FAILED");
+    CHECK(compute_event_writer_state(
+              true, true, false, false) == "PROTECTED");
+    CHECK(compute_storage_state(
+              true, 11LL * 1024 * 1024 * 1024,
+              2LL * 1024 * 1024 * 1024,
+              1LL * 1024 * 1024 * 1024) == "OK");
+    CHECK(compute_storage_state(
+              false, 11LL * 1024 * 1024 * 1024,
+              2LL * 1024 * 1024 * 1024,
+              1LL * 1024 * 1024 * 1024) == "UNAVAILABLE");
   }
 
   if (g_failures == 0) std::cout << "通过 | 视频健康判定单元测试全部通过\n";

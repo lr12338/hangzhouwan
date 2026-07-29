@@ -21,8 +21,8 @@
 //   - HEALTHY->DEGRADED 需 confirm_down 次连续确认（滤除单采样毛刺）；
 //   - 降级->恢复(HEALTHY)需 confirm_up 次连续确认（避免恢复抖动/假恢复）。
 //
-// 整体：任一路 resource_fatal -> FAILED；双路均 FAILED -> FAILED；
-//       单路 FAILED -> DEGRADED(突出故障流)；任一路 DEGRADED -> DEGRADED；
+// 整体：任一路 resource_fatal -> FAILED；任一必需流 FAILED -> FAILED；
+//       任一路 DEGRADED -> DEGRADED；
 //       业务仅检测 -> DEGRADED；否则 HEALTHY。systemd active 但数据面失败绝不显示 HEALTHY。
 //
 // 所有阈值集中于 HealthThresholds 并写明默认值；调用方可覆盖（生产路径用默认值）。
@@ -31,15 +31,18 @@
 #define HZW_MONITORING_VIDEO_HEALTH_LOGIC_H
 
 #include <cstdint>
+#include <deque>
 #include <string>
 
 namespace hzw {
 
-enum class StreamHealthLevel { HEALTHY, DEGRADED, FAILED };
+enum class StreamHealthLevel { STARTING, HEALTHY, DEGRADED, FAILED };
 
 // 单路健康输入（由调用方从 PipelineMetrics + pipeline.resource_fatal() 采集）。
 struct StreamHealthInput {
   int64_t disconnected_ms = 0;  // 自上次成功读取帧以来的毫秒数（0=刚读到帧）；last_read_ms==0 时调用方传 0
+  bool starting = false;        // 尚未收到首帧且仍在有限启动宽限内
+  bool thread_failed = false;   // 管线线程已经非零退出
   bool rtmp_connected = false;  // 近期有成功输出帧
   double output_fps = 0.0;      // 本采样窗口输出帧率
   double inference_fps = 0.0;   // 本采样窗口推理帧率
@@ -51,7 +54,7 @@ struct StreamHealthInput {
 struct HealthThresholds {
   int64_t frame_stale_ms = 15000;       // 超过此值视为 RTSP 断开（最近帧过时）
   int64_t reconnect_grace_ms = 60000;   // 断开宽限期：[stale,grace) 为瞬时重连(DEGRADED)，>=grace 为持续断流(FAILED)
-  double min_output_fps = 7.0;          // 低于此值视为输出降级
+  double min_output_fps = 9.0;          // 低于此值视为输出降级
   double min_inference_fps = 4.0;       // 低于此值视为推理降级
   int64_t max_reconnects_per_hour = 2;  // 滑动一小时重连上限
   int confirm_down = 2;                 // HEALTHY->DEGRADED 需连续确认采样数（防毛刺）
@@ -99,12 +102,28 @@ BusinessHealthResult compute_business_health(
     bool enabled_a, bool link_a, const std::string& mode_a,
     bool enabled_b, bool link_b, const std::string& mode_b);
 
+// 用累计“尝试数”维护滑动窗口；失败尝试同样进入窗口。
+int64_t update_reconnect_attempt_window(
+    std::deque<int64_t>& timestamps_ms, int64_t total_attempts,
+    int64_t& previous_total, int64_t now_ms,
+    int64_t window_ms = 3600000);
+
+std::string compute_event_writer_state(
+    bool required_and_pipeline_running, bool writer_running,
+    bool write_enabled, bool has_error);
+
+std::string compute_storage_state(
+    bool data_available, int64_t free_bytes,
+    int64_t warning_bytes, int64_t protected_bytes);
+
 // 计算双路整体健康（基于已防抖的单路等级）。fatal_a/b 用于区分 resource_fatal 降级类别。
 // business_link_healthy=false 表示 Sidecar 链路不可用。本帧无目标/PENDING 不降级。
 DualHealthResult compute_dual_status(StreamHealthLevel level_a,
                                      StreamHealthLevel level_b,
                                      bool fatal_a, bool fatal_b,
-                                     bool business_link_healthy);
+                                     bool business_link_healthy,
+                                     bool enabled_a = true,
+                                     bool enabled_b = true);
 
 }  // namespace hzw
 

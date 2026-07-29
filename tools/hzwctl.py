@@ -13,6 +13,7 @@
   stop               停止服务
   restart            重启服务
   smoke-test         冒烟测试（300秒内）
+  upstream-check     检查启用流的 RTSP/RTMP 端点
   version            版本信息
   collect-diagnostics 收集诊断信息
 """
@@ -25,6 +26,7 @@ import socket
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 try:
     import yaml
@@ -310,6 +312,10 @@ def _check_config_consistency(config_path, result):
     )
     result.check("生产输出规格 1280x720@10/1200kbps/GOP20",
                  valid_output, f"{len(enabled)} streams")
+    healthy_fps = int(doc.get("health", {}).get("stream_healthy_fps", 9))
+    result.check("工业健康输出门禁 >=9fps",
+                 env != "production" or healthy_fps >= 9,
+                 f"stream_healthy_fps={healthy_fps}")
 
     event_cfg = doc.get("event_writer", {})
     event_dir = event_cfg.get("directory", "")
@@ -639,7 +645,8 @@ def cmd_preflight(args):
         print()
 
     print(f"=== 预检结果: {result.passes} 通过, {result.fails} 失败 ===")
-    return 1 if result.fails > 0 else 0
+    # EX_CONFIG：供 Video 的 RestartPreventExitStatus=78 阻止预检失败风暴。
+    return 78 if result.fails > 0 else 0
 
 
 def cmd_status(args):
@@ -676,7 +683,12 @@ def cmd_status(args):
     if vh.get("available", False) and "error" not in vh:
         status = vh.get("status", "UNKNOWN")
         # 状态头条：HEALTHY/DEGRADED/FAILED 醒目展示，避免"降级状态 none"假健康
-        marker = {"HEALTHY": "OK", "DEGRADED": "DEGRADED", "FAILED": "FAILED"}.get(status, "UNKNOWN")
+        marker = {
+            "STARTING": "STARTING",
+            "HEALTHY": "OK",
+            "DEGRADED": "DEGRADED",
+            "FAILED": "FAILED",
+        }.get(status, "UNKNOWN")
         print("  (数据来源: Video 健康 Socket)")
         print(f"  状态:          [{marker}] {status}")
         reason = vh.get("health_reason", "")
@@ -695,8 +707,14 @@ def cmd_status(args):
                 print(f"    inference_fps:{s.get('inference_fps', '?')}")
                 print(f"    RTSP重连:     {s.get('rtsp_reconnects', '?')}")
                 print(f"    RTMP重连:     {s.get('rtmp_reconnects', '?')}")
+                print(f"    重连尝试(1h): {s.get('reconnect_attempts_1h', '?')}")
+                print(f"    生命周期:     {s.get('lifecycle', '?')} exit={s.get('exit_code', '?')}")
+                if s.get("failure_stage"):
+                    print(f"    失败阶段:     {s.get('failure_stage')}")
                 print(f"    最近帧(ms):   {s.get('last_frame_time_ms', '?')}")
                 print(f"    队列长度:     {s.get('queue_length', '?')}")
+                print(f"    输入间隔P95/99:{s.get('input_interarrival_p95_ms', '?')}/"
+                      f"{s.get('input_interarrival_p99_ms', '?')}ms")
                 print(f"    e2e P95:      {s.get('e2e_p95_ms', '?')}ms")
         print(f"  Business:      {vh.get('business_state', '?')}")
         print(f"  降级状态:      {vh.get('degradation', 'none')}")
@@ -714,8 +732,8 @@ def cmd_status(args):
                 print(f"  流 {sid}:          无日志")
 
     # 磁盘
-    rc, out, _ = run("df -h /opt 2>/dev/null | tail -1", timeout=3)
-    print(f"磁盘 /opt:       {out or 'N/A'}")
+    rc, out, _ = run("df -h / /data 2>/dev/null", timeout=3)
+    print(f"磁盘 / 与 /data:\n{out or 'N/A'}")
     return 0
 
 
@@ -729,7 +747,9 @@ def cmd_health(args):
         else:
             print("=== Video 健康（Socket）===")
             print(json.dumps(vh, ensure_ascii=False, indent=2))
-        return {"HEALTHY": 0, "DEGRADED": 1, "FAILED": 2}.get(status, 2)
+        return {
+            "HEALTHY": 0, "STARTING": 1, "DEGRADED": 1, "FAILED": 2
+        }.get(status, 2)
 
     health = query_sidecar_health(BUSINESS_SOCK)
     if getattr(args, "json", False):
@@ -744,6 +764,12 @@ def cmd_wait(args):
     """等待服务就绪。"""
     timeout = args.timeout
     deadline = time.time() + timeout
+    config = load_yaml(DEFAULT_CONFIG) or {}
+    health_config = config.get("health", {})
+    output_fps_min = float(health_config.get("stream_healthy_fps", 9))
+    inference_fps_min = float(
+        health_config.get("inference_healthy_fps", 4))
+    reconnects_max = int(health_config.get("reconnects_per_hour", 2))
     if args.service == "business":
         print(f"等待 business 就绪（最长 {timeout}s）...")
         while time.time() < deadline:
@@ -790,10 +816,12 @@ def cmd_wait(args):
                     stream_failures.append(f"{sid}:RTSP")
                 if not s.get("rtmp_connected"):
                     stream_failures.append(f"{sid}:RTMP")
-                if float(s.get("output_fps", 0) or 0) < 7:
+                if float(s.get("output_fps", 0) or 0) < output_fps_min:
                     stream_failures.append(f"{sid}:output_fps")
-                if float(s.get("inference_fps", 0) or 0) < 4:
+                if float(s.get("inference_fps", 0) or 0) < inference_fps_min:
                     stream_failures.append(f"{sid}:inference_fps")
+                if int(s.get("reconnect_attempts_1h", 0) or 0) > reconnects_max:
+                    stream_failures.append(f"{sid}:reconnect_attempts_1h")
             business_ok = vh.get("business_link") in ("HEALTHY", "DISABLED")
             storage_ok = vh.get("storage", {}).get("state") in ("OK", "WARNING")
             if (vh.get("available") and sidecar_ok and not stream_failures
@@ -862,6 +890,64 @@ def cmd_smoke_test(args):
     return 1 if fail_c > 0 else 0
 
 
+def _load_environment_files(paths):
+    values = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as stream:
+                for raw in stream:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    if line.startswith("export "):
+                        line = line[7:].lstrip()
+                    key, value = line.split("=", 1)
+                    value = value.strip()
+                    if (len(value) >= 2 and value[0] == value[-1] and
+                            value[0] in ("'", '"')):
+                        value = value[1:-1]
+                    values[key.strip()] = value
+        except OSError:
+            continue
+    return values
+
+
+def cmd_upstream_check(args):
+    """激活前只读检查所有启用 RTSP/RTMP 端点，绝不输出 URL/凭据。"""
+    doc = load_yaml(args.config or DEFAULT_CONFIG)
+    if not doc:
+        print("错误: 无法加载 application.yaml")
+        return 78
+    file_environment = _load_environment_files(args.environment_file)
+    failures = []
+    for stream in doc.get("streams", []):
+        if not stream.get("enabled"):
+            continue
+        stream_id = stream.get("id", "?")
+        for label, key, default_port in (
+                ("RTSP", "input_url_env", 554),
+                ("RTMP", "output_url_env", 1935)):
+            variable = stream.get(key, "")
+            value = os.environ.get(variable, file_environment.get(variable, ""))
+            parsed = urlparse(value)
+            if not parsed.hostname:
+                failures.append(f"{stream_id}:{label}:missing_endpoint")
+                continue
+            try:
+                with socket.create_connection(
+                        (parsed.hostname, parsed.port or default_port),
+                        timeout=3):
+                    pass
+            except OSError:
+                failures.append(f"{stream_id}:{label}:unreachable")
+    if failures:
+        print("错误: 上游端点门禁失败（URL/凭据已隐藏）: " +
+              ",".join(failures))
+        return 75
+    print("✅ 所有启用流的 RTSP/RTMP 端口均可达（URL/凭据已隐藏）")
+    return 0
+
+
 def cmd_version(args):
     """版本信息。"""
     release_path, release_ver = current_release()
@@ -875,10 +961,27 @@ def cmd_version(args):
 
 def cmd_collect_diagnostics(args):
     """收集诊断信息。"""
-    diag_dir = os.environ.get("HZW_DIAG_DIR", "/var/log/hangzhouwan/diagnostics")
+    config = load_yaml(DEFAULT_CONFIG) or {}
+    supervisor_config = config.get("supervisor", {})
+    retention_days = int(
+        supervisor_config.get("diagnostics_retention_days", 7))
+    diagnostics_max_mb = int(
+        supervisor_config.get("diagnostics_max_mb", 500))
+    diag_dir = os.environ.get(
+        "HZW_DIAG_DIR", "/data/hangzhouwan/monitor/diagnostics")
+    if not os.path.realpath(diag_dir).startswith("/data/"):
+        print("错误: 诊断目录必须位于 /data，禁止回退根盘")
+        return 1
+    if not os.path.ismount("/data"):
+        print("错误: /data 未挂载，拒绝把诊断写入根盘")
+        return 1
     os.makedirs(diag_dir, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    diag_file = os.path.join(diag_dir, f"diag_{ts}.txt")
+    phase = "".join(
+        char if char.isalnum() or char in "_-" else "_"
+        for char in os.environ.get("HZW_DIAG_PHASE", "manual"))
+    run_id = f"{ts}_{time.time_ns() % 1000000000:09d}_{os.getpid()}"
+    diag_file = os.path.join(diag_dir, f"diag_{run_id}_{phase}.txt")
     print(f"收集诊断信息到 {diag_file}...")
     with open(diag_file, "w") as f:
         f.write(f"=== 诊断报告 {ts} ===\n\n")
@@ -900,10 +1003,36 @@ def cmd_collect_diagnostics(args):
         f.write("--- disk ---\n")
         rc, out, _ = run("df -h", timeout=3)
         f.write(out + "\n\n")
+        f.write("--- network ---\n")
+        rc, out, _ = run(
+            "ip -s link 2>&1; ip route 2>&1; ss -tan 2>&1", timeout=8)
+        f.write(out + "\n\n")
+        f.write("--- root disk audit ---\n")
+        rc, out, _ = run(
+            "du -x -d1 /home /usr /var /tmp 2>/dev/null | sort -n",
+            timeout=20)
+        f.write(out + "\n\n")
         f.write("--- TPU ---\n")
         rc, out, _ = run("bm-smi 2>&1 || cat /sys/kernel/debug/bm1684/memory_usage 2>&1 || echo 'N/A'", timeout=5)
         f.write(out + "\n")
+    cutoff = time.time() - retention_days * 86400
+    candidates = []
+    for item in os.scandir(diag_dir):
+        if (item.is_file(follow_symlinks=False) and
+                item.name.startswith("diag_") and item.name.endswith(".txt")):
+            stat = item.stat(follow_symlinks=False)
+            if item.path != diag_file and stat.st_mtime < cutoff:
+                os.unlink(item.path)
+            else:
+                candidates.append((stat.st_mtime, stat.st_size, item.path))
+    total = sum(size for _, size, _ in candidates)
+    for _, size, path in sorted(candidates):
+        if total <= diagnostics_max_mb * 1024 * 1024 or path == diag_file:
+            continue
+        os.unlink(path)
+        total -= size
     print(f"✅ 诊断信息已保存: {diag_file}")
+    print(f"DIAGNOSTIC_PATH={diag_file}")
     return 0
 
 
@@ -931,6 +1060,11 @@ def main():
     sub.add_parser("stop", help="停止服务")
     sub.add_parser("restart", help="重启服务")
     sub.add_parser("smoke-test", help="冒烟测试")
+    upstream = sub.add_parser("upstream-check", help="检查 RTSP/RTMP 端点")
+    upstream.add_argument("--config", default=DEFAULT_CONFIG)
+    upstream.add_argument(
+        "--environment-file", action="append", default=[],
+        help="只读加载 systemd EnvironmentFile")
     sub.add_parser("version", help="版本")
     sub.add_parser("collect-diagnostics", help="收集诊断")
 
@@ -950,6 +1084,7 @@ def main():
         "stop": (cmd_stop, args),
         "restart": (cmd_restart, args),
         "smoke-test": (cmd_smoke_test, args),
+        "upstream-check": (cmd_upstream_check, args),
         "version": (cmd_version, args),
         "collect-diagnostics": (cmd_collect_diagnostics, args),
     }

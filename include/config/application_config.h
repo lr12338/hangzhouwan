@@ -125,7 +125,7 @@ struct ApplicationConfig {
 
   // health
   int health_check_interval_seconds = 10;
-  int stream_healthy_fps = 7;
+  int stream_healthy_fps = 9;
   int stream_degraded_fps = 5;
   int inference_healthy_fps = 4;
   int frame_stale_seconds = 15;

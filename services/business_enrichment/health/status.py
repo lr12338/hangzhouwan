@@ -63,8 +63,10 @@ class HealthStatus:
 class HealthChecker:
     """视频服务端健康检查（由 C++ 端通过 health 请求获取）。"""
 
-    def __init__(self):
+    def __init__(self, output_fps_min=9, reconnects_per_hour=2):
         self.stream_status = {}
+        self.output_fps_min = float(output_fps_min)
+        self.reconnects_per_hour = int(reconnects_per_hour)
 
     def update_stream(self, stream_id, rtsp_connected, rtmp_connected,
                       output_fps, inference_fps, last_frame_time,
@@ -86,15 +88,15 @@ class HealthChecker:
         """计算单路健康状态。
 
         规则：
-          output_fps >= 7: HEALTHY
-          5 <= output_fps < 7 持续60秒: DEGRADED
+          output_fps >= 配置阈值（生产默认9）: HEALTHY
+          output_fps 低于配置阈值: DEGRADED
           output_fps < 5 持续60秒: FAILED
-          每小时重连>2: 告警(DEGRADED)
+          每小时重连超过配置阈值: 告警(DEGRADED)
         """
         if output_fps < 5:
             return FAILED
-        if output_fps < 7:
+        if output_fps < self.output_fps_min:
             return DEGRADED
-        if reconnect_count_hour > 2:
+        if reconnect_count_hour > self.reconnects_per_hour:
             return DEGRADED
         return HEALTHY
