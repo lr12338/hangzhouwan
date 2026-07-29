@@ -1,0 +1,67 @@
+[Unit]
+Description=Hangzhou Bay Video Pipeline Service (Dual Stream)
+Wants=hangzhouwan-business.service network-online.target
+After=hangzhouwan-business.service network-online.target
+PartOf=hangzhouwan.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=hangzhouwan-video
+Group=hangzhouwan
+WorkingDirectory=/opt/hangzhouwan/current
+EnvironmentFile=/etc/hangzhouwan/video.env
+ExecStartPre=/opt/hangzhouwan/current/bin/hzwctl \
+  preflight --release /opt/hangzhouwan/current \
+  --config /etc/hangzhouwan/application.yaml --offline --activation
+ExecStartPre=/opt/hangzhouwan/current/bin/hzwctl \
+  wait-business --timeout 30
+ExecStart=/opt/hangzhouwan/current/bin/dual_stream_app \
+  --config /etc/hangzhouwan/application.yaml \
+  --enable-business \
+  --business-socket /run/hangzhouwan/business.sock
+Restart=on-failure
+RestartPreventExitStatus=75 78
+RestartSec=60
+LimitNOFILE=8192
+LimitCORE=0
+KillSignal=SIGTERM
+TimeoutStartSec=60
+TimeoutStopSec=45
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+# 视频进程必须看到白名单中的 BM1684/VPU 设备；设备访问由
+# DevicePolicy=closed + DeviceAllow 精确限制。
+PrivateDevices=false
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+DeviceAllow=/dev/bm-tpu0 rw
+DeviceAllow=/dev/bm-vpp rw
+DeviceAllow=/dev/bmdev-ctl rw
+DeviceAllow=/dev/ion rw
+DeviceAllow=/dev/jpu rw
+DeviceAllow=/dev/vpu rw
+ReadWritePaths=/run/hangzhouwan /data/hangzhouwan/events /data/hangzhouwan/monitor
+TasksMax=256
+MemoryHigh=512M
+MemoryMax=768M
+OOMScoreAdjust=-500
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+SyslogIdentifier=hangzhouwan-video
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=hangzhouwan.target

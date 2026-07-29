@@ -1,0 +1,37 @@
+[Unit]
+Description=Hangzhou Bay Production Health Supervisor
+After=hangzhouwan-business.service hangzhouwan-video.service network-online.target
+Wants=network-online.target
+PartOf=hangzhouwan.target
+
+[Service]
+Type=simple
+User=root
+Group=hangzhouwan
+WorkingDirectory=/opt/hangzhouwan/current
+EnvironmentFile=/etc/hangzhouwan/business.env
+EnvironmentFile=/etc/hangzhouwan/video.env
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/hangzhouwan/current/venv/bin/python3 -m services.monitoring.supervisor --config /etc/hangzhouwan/application.yaml --interval 30
+Restart=on-failure
+RestartSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/data/hangzhouwan/monitor
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitCORE=0
+TasksMax=64
+MemoryHigh=128M
+MemoryMax=256M
+OOMScoreAdjust=-100
+SyslogIdentifier=hangzhouwan-monitor
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=hangzhouwan.target

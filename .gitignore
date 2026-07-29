@@ -1,35 +1,87 @@
-# IDE ���������ļ�
+# ===== IDE / 编辑器 =====
 .idea/
 *.iml
 .vscode/
 
-# Python ����������ļ�
+# ===== Python 缓存 =====
 __pycache__/
+**__pycache__**/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
-# ��־����ʱ���
+# ===== 日志与临时文件 =====
 *.log
+logs/
+run/
 temp/
 output/
 *.bak
 
-# �����Ƴ�����ѹ���������������Git��
+# ===== Windows 可执行与压缩包（不进仓库） =====
 *.exe
 *.dll
 *.zip
 *.rar
 ffmpeg/
-"nginx 1.7.11.3 Gryphon/"
 
-# ģ�ʹ��ļ���������Git LFS������
+# ===== 模型与坐标标定文件（大文件，按设计不入库） =====
 *.pkl
+*.joblib
 *.pt
-*.onnx
 *.pth
+*.onnx
+*.bmodel
+artifacts/
+testdata/model_test/
+yolov7_ship*
+_0.dat
 *.bin
 
-# ϵͳ�����ļ�
+# ===== 敏感本地配置（仅保留 example） =====
+.env
+config/application.yaml
+config/logging.yaml
+config/video.env
+config/business.env
+
+# ===== 运行时数据与构建产物 =====
+data/
+build/
+cmake-build-*/
+*.sock
+*.pid
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+
+# ===== 系统文件 =====
 .DS_Store
 Thumbs.db
+
+# 运行时产物（含历史日志，可能嵌入凭据，不入库）
+
+# INT8 校准帧（由 test.mp4 派生，可由脚本再生，不入库）
+testdata/calibration/*.jpg
+testdata/calibration/*.png
+
+# 编译产物（仅提交源码，二进制可再生）
+tools/image_inference/bmrt_load_test
+tools/chip_info/chip_info
+
+# 阶段3 C++ 编译产物（CMake 构建）
+build/
+tools/image_inference/single_image_infer
+tests/unit_cpp/test_postprocess
+*.o
+Testing/
+tools/image_inference/debug_infer.cpp
+
+# 阶段4.4 内部开发产物（含真实日志/JSONL，不入库）
+artifacts/internal-development/
+*.jsonl
+
+# ===== 误创建文件（终端输出重定向为文件，不入库） =====
+rtmp:

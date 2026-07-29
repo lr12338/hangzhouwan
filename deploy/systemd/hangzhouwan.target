@@ -1,0 +1,7 @@
+[Unit]
+Description=Hangzhou Bay Dual-Stream Detection (A/B)
+Wants=hangzhouwan-business.service hangzhouwan-video.service hangzhouwan-supervisor.service hangzhouwan-maintenance-recovery.timer
+After=hangzhouwan-business.service hangzhouwan-video.service hangzhouwan-supervisor.service hangzhouwan-maintenance-recovery.timer
+
+[Install]
+WantedBy=multi-user.target

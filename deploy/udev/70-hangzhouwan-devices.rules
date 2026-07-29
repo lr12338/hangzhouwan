@@ -1,0 +1,7 @@
+# BM1684 视频/推理设备仅允许 root 与 hangzhouwan 运行组访问。
+KERNEL=="bm-tpu[0-9]*", GROUP="hangzhouwan", MODE="0660"
+KERNEL=="bm-vpp", GROUP="hangzhouwan", MODE="0660"
+KERNEL=="bmdev-ctl", GROUP="hangzhouwan", MODE="0660"
+KERNEL=="ion", GROUP="hangzhouwan", MODE="0660"
+KERNEL=="jpu", GROUP="hangzhouwan", MODE="0660"
+KERNEL=="vpu", GROUP="hangzhouwan", MODE="0660"

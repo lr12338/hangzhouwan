@@ -1,0 +1,162 @@
+# 杭州湾双路船舶检测 · BM1684 边缘部署示例配置
+# 说明：本文件为示例，不含任何真实生产凭据、地址或令牌。
+#       真实配置请放置于 /data/hangzhouwan/config/application.yaml（权限 600），
+#       并通过环境变量注入 RTSP / RTMP / MQTT / Token 等敏感值。
+
+application:
+  environment: development        # development | staging | production
+  log_level: INFO                 # DEBUG | INFO | WARNING | ERROR
+  language: zh_CN
+
+inference:
+  backend: bmrt                   # 工控机正式后端：bmrt（BM1684 BMRuntime）
+  model_path: ""                  # best.onnx / best.bmodel 绝对路径，由部署注入
+  bmodel_sha256: ""                # bmodel SHA256（非空时校验）
+  device: 0                        # TPU 设备号
+  input_width: 640
+  input_height: 640
+  confidence_threshold: 0.1
+  iou_threshold: 0.1
+
+streams:
+  - id: A
+    enabled: false                # 默认全部禁用，未配置凭据时绝不连接正式流
+    input_url_env: STREAM_A_INPUT_URL
+    output_url_env: STREAM_A_OUTPUT_URL
+    coordinate_model: ""          # 0121_random_forest_model.pkl 路径，由部署注入
+    inference_fps: 5
+    output_fps: 10
+    output_width: 1280
+    output_height: 720
+    output_bitrate_kbps: 1200
+    forbidden_rectangles: []      # [[x1, y1, x2, y2], ...]
+    forbidden_polygons: []        # [[[x, y], ...], ...]
+
+  - id: B
+    enabled: false
+    input_url_env: STREAM_B_INPUT_URL
+    output_url_env: STREAM_B_OUTPUT_URL
+    coordinate_model: ""          # beishang_x-l.pkl 路径，由部署注入
+    inference_fps: 5
+    output_fps: 10
+    output_width: 1280
+    output_height: 720
+    output_bitrate_kbps: 1200
+    forbidden_rectangles: []
+    forbidden_polygons: []
+
+ais:
+  enabled: false
+  mqtt_host: ""
+  mqtt_port: 1883
+  mqtt_client_id_env: AIS_MQTT_CLIENT_ID
+  mqtt_username_env: AIS_MQTT_USERNAME
+  mqtt_password_env: AIS_MQTT_PASSWORD
+  topics: []                      # ["upAIS/#"] 通配符订阅（base_2250/2251 已离线）
+  data_timeout_seconds: 30
+  max_distance_km: 30
+
+ship_name_service:
+  enabled: false
+  endpoint: ""                    # 船名查询 HTTP 端点
+  token_env: SHIP_NAME_API_TOKEN
+  connect_timeout_seconds: 3
+  read_timeout_seconds: 5
+  cache_ttl_seconds: 86400
+
+runtime:
+  frame_queue_size: 1             # 队列必须为 1，避免积压
+  processed_queue_size: 1
+  reconnect_initial_seconds: 2
+  reconnect_max_seconds: 30
+  extra_frame_buffer_num: 20   # 解码输出缓冲池（重连稳定性关键，推荐 20；压测见 docs/production/vpu-reconnect-fix.md）
+  decoder: h264_bm
+  encoder: h264_bm
+  preprocess: bmcv                 # cpu | bmcv
+  draw_mode: bmcv                  # cpu | bmcv | none
+  health_check_interval_seconds: 10
+
+# === 阶段4.5 生产候选配置扩展 ===
+
+business:
+  coordinate_mode: sklearn            # sklearn | numpy | mock | off（production禁止mock/off）
+  model_a_path: ""                    # 0121_random_forest_model.pkl 绝对路径
+  model_b_path: ""                    # beishang_x-l.pkl 绝对路径
+  reference_width: 2560
+  reference_height: 1440
+  socket_path: /run/hangzhouwan/business.sock
+  request_timeout_ms: 200
+  max_connections: 8
+  enable_evidence_recording: false    # 生产可按需开启
+  ais_max_distance_m:
+    A: 500
+    B: 500
+  ais_max_extrapolation_sec: 120
+
+mqtt:
+  host_env: AIS_MQTT_HOST
+  port: 1883
+  client_id_env: AIS_MQTT_CLIENT_ID
+  username_env: AIS_MQTT_USERNAME
+  password_env: AIS_MQTT_PASSWORD
+  topics: ["upAIS/#"]  # 通配符订阅所有 AIS 基站（base_2250/2251 已离线）
+  keepalive: 60
+  reconnect_sec: 5
+  qos: 1
+  state_topic: "hangzhouwan/{device_id}/state"
+  event_topic: "hangzhouwan/{device_id}/events"
+  offline_max_mb: 10
+  offline_max_records: 1000
+
+health:
+  check_interval_seconds: 10
+  stream_healthy_fps: 9
+  stream_degraded_fps: 5
+  inference_healthy_fps: 4
+  frame_stale_seconds: 15
+  stream_failed_seconds: 60
+  reconnects_per_hour: 2
+
+event_writer:
+  directory: /data/hangzhouwan/events
+  rotate_size_mb: 50
+  rotate_seconds: 3600
+  retention_days: 7
+  sync_seconds: 5
+  queue_max_mb: 4
+  disk_warn_mb: 2048
+  disk_stop_mb: 1024
+
+supervisor:
+  interval_seconds: 30
+  failed_confirmations: 3
+  socket_failure_seconds: 90
+  cooldown_seconds: 1800
+  daily_recovery_limit: 2
+  root_disk_warn_mb: 2048
+  root_disk_critical_mb: 1536
+  recovery_retry_seconds: 1800
+  recovery_alert_repeat_seconds: 21600
+  diagnostics_retention_days: 7
+  diagnostics_max_mb: 500
+
+logging:
+  video_log_max_size_mb: 50
+  video_log_max_files: 10
+  sidecar_log_max_size_mb: 50
+  sidecar_log_max_files: 10
+  jsonl_max_size_mb: 50
+  jsonl_max_files: 10
+  disk_threshold_mb: 500
+
+deploy:
+  systemd_business_service: deploy/systemd/hangzhouwan-business.service
+  systemd_video_service: deploy/systemd/hangzhouwan-video.service
+  install_script: deploy/install.sh
+  uninstall_script: deploy/uninstall.sh
+  rollback_script: deploy/rollback.sh
+  preflight_script: deploy/preflight.sh
+  # 灰度安全：Windows 旧服务正在使用的正式 RTMP 推流地址，BM1684 灰度输出不得命中。
+  # preflight 会解析各启用流 output_url_env 的真实值并校验不在此列表内。
+  forbidden_formal_outputs: []
+  # 本阶段不自动 enable systemd 服务

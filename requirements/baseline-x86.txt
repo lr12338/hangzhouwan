@@ -1,0 +1,19 @@
+# x86 旧模型基线环境（仅用于在 x86 开发机上复现原版 ONNX/PyTorch 推理与坐标模型验证）
+# 注意：此清单仅用于 x86 基线对比，【不得】在 BM1684 工控机上安装。
+#       BM1684 生产热路径为 C++ BMRuntime，不依赖 torch/onnxruntime-gpu/CUDA。
+
+# ONNX 推理（x86 CPU 或 CUDA GPU 二选一，勿同时安装）
+onnx==1.16.1
+onnxruntime==1.19.2           # CPU 基线优先；如需 GPU 对比再单独装 onnxruntime-gpu
+
+# 数值与图像
+numpy==1.24.3
+opencv-python==4.10.0.84
+
+# 坐标随机森林模型加载与预测
+joblib==1.4.2
+scikit-learn==1.3.2
+pandas==2.0.3
+
+# 渲染（中文框）
+Pillow==11.1.0
