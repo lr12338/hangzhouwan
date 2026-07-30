@@ -39,6 +39,7 @@
 | G5 | RTMP 重连不重建编码器 | Step 6.2 `rtmp_fault_injection.sh` 输出 | 编码器创建次数=2（双路），100 次重连后不增加 |
 | G6 | 退出码 70 触发 systemd 恢复 | Step 6.4 三级核验 | 静态审计 ✅ + 现场配置核验 ✅ + 真实恢复验证（本轮不执行，G6 端到端未完成） |
 | G7 | 双路输出/推理/推流恢复 | Step 6.3 健康验收 | `status=HEALTHY`（DEGRADED 不得签收），见通过标准明细 |
+| G8 | 720p 画面正确性 | Step 6.3 编码前帧 + RTMP 软件解码帧 | A/B 均为 1280×720；场景一致；无彩纹、绿屏、黑屏、平面错位或连续解码错误 |
 
 ## 0.1 候选与门禁当前状态（2026-07-24）
 
@@ -295,6 +296,11 @@ journalctl -u hangzhouwan-video.service --since "3 min ago" | grep -ciE '检测|
 bm-smi
 ```
 
+画面内存修复候选还必须执行 G8。按
+[`video-corruption-fix.md`](video-corruption-fix.md) 临时开启一次性编码前抓帧，
+并分别保存 A/B RTMP 软件解码帧。仅 `ffprobe` 成功或 fps 正常不能证明画面
+内容正确；对比结束后必须清除 `HZW_PREENCODE_DUMP_DIR`。
+
 **G7 通过标准明细（全部满足方可签收）：**
 
 | 检查项 | 通过标准 |
@@ -307,12 +313,13 @@ bm-smi
 | MQTT | `mqtt_connected=true` |
 | Business Socket | `business_socket_connected=true`（UDS 连接正常） |
 | 检测叠加 | journal 有检测框/快照输出（推理结果在渲染） |
+| 画面正确性 | 编码前帧与 RTMP 软件解码帧场景一致，无随机彩纹/绿屏/黑屏/平面错位 |
 | 整体状态 | `status=HEALTHY` |
 
 - **DEGRADED 策略**：`status=DEGRADED` 只能进入限时排查（最长 10 min），不得签收上线。排查后恢复 HEALTHY 可签收；超时未恢复则回滚。
 - **HEALTHY 签收**：仅 `status=HEALTHY` 且上述全部检查项满足方可正式签收上线。
 - 失败处理：任一不满足 -> 回滚（Step 7）。
-- 是否继续：G1–G7 全部满足 -> **签收上线**；否则回滚。
+- 是否继续：G1–G8 全部满足 -> **签收上线**；否则回滚。
 
 ### 6.4 退出码 70 systemd 恢复核验（G6）
 

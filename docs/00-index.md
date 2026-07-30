@@ -28,6 +28,7 @@
 | [production/maintenance-window-runbook.md](production/maintenance-window-runbook.md) | VPU 重连修复维护窗口 Runbook（门禁/步骤/回滚） |
 | [production/maintenance-window-audit-evidence.md](production/maintenance-window-audit-evidence.md) | 生产部署审计证据（1eba419/9d449ab/c008eac 部署记录） |
 | [production/manual-long-run-guide.md](production/manual-long-run-guide.md) | 人工长时测试指南（L1-L4） |
+| [production/video-corruption-fix.md](production/video-corruption-fix.md) | 1280×720 乱码根因、内存契约、灰度与回滚门禁 |
 
 ## 历史文档
 
@@ -43,8 +44,8 @@
 
 | 路径 | 用途 |
 |---|---|
-| `python3 -m pytest tests/ -q` | Python 全量测试（159 passed） |
-| `cd build && ctest --output-on-failure` | C++ 单元测试（16/16 passed） |
+| `python3 -m pytest tests/ -q` | Python 全量测试（193 passed） |
+| `cd build && ctest --output-on-failure` | CTest 全量（17/17 passed，含稳定性脚本） |
 | `tests/run_tests.py` | 测试入口（纯标准库） |
 | `tools/release/build_release.sh` | Release 构建 |
 | `tools/release/verify_release.sh` | Release 验证 |

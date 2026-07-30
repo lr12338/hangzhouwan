@@ -311,6 +311,16 @@ journalctl -u hangzhouwan-business.service --since today --no-pager \
   | grep -E 'MQTT|AIS|模型|错误|失败'
 ```
 
+编码前画面诊断（维护窗口使用）：在 Video 的环境文件中临时设置
+`HZW_PREENCODE_DUMP_DIR=/data/hangzhouwan/monitor` 并重启 Video。每路只导出
+第一张缩放后的主机 YUV420P 帧，不持续写盘。检查完成后删除该环境变量。
+
+```bash
+ffmpeg -f rawvideo -pixel_format yuv420p -video_size 1280x720 \
+  -i /data/hangzhouwan/monitor/preencode_A_1280x720.yuv \
+  -frames:v 1 /data/hangzhouwan/monitor/preencode_A_1280x720.png
+```
+
 ### 8.1 日志查询规模限制（生产排障必须遵守）
 
 生产日志可能含大量重复字符和错误风暴。**禁止**直接执行 `journalctl --no-pager`、`dmesg`、`cat 超大日志`。每次查询默认满足：

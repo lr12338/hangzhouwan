@@ -3,7 +3,15 @@
 本 Release 将视频热路径、事件数据和恢复控制面分离。生产输出固定为
 1280×720、10fps、1200kbps、GOP 20；检测、禁区和坐标计算继续使用
 2560×1440 原始坐标，绘制完成后由 BMCV VPP 缩放为 YUV420P，再交给
-`h264_bm` 编码。
+`h264_bm` 编码。缩放结果先回拷到标准主机 `AVFrame`，编码器以
+`is_dma_buffer=0` 读取；禁止用未填充的主机占位平面或手工
+`data[4..6]` 伪装 DMA 帧。该约束牺牲约 28MB/s 的双路 10fps 回拷带宽，
+换取明确、可验证的帧内存所有权。
+
+维护窗口可通过 `video.env` 临时设置
+`HZW_PREENCODE_DUMP_DIR=/data/hangzhouwan/monitor`。每路只写一帧编码前
+YUV420P，检查后必须移除变量并重启 Video。详细判定和上线步骤见
+[`video-corruption-fix.md`](video-corruption-fix.md)。
 
 ## 数据保留与磁盘保护
 

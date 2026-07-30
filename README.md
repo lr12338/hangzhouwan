@@ -42,6 +42,7 @@
 - **阶段3 完成**：C++ 单图推理 PoC 完成（BmrtDetector + YOLOv7 后处理 + 绘框），预处理 56ms，推理 16ms，后处理 0.6ms；100 次重复推理平均 15.99ms，框数稳定，无内存泄漏；C++ 单元测试和 Python 测试全部通过（`cd build && ctest` + `python3 -m pytest tests/`）。
 - **阶段4 进行中**：单路硬件视频管线功能通过；BMCV 绘制优化（`--draw-mode bmcv`）消除 sws 往返瓶颈，输出达 10fps；短时 300s 验证通过（10.003fps，退出码 0，RSS +356KB，P95=150ms 稳定，无残留）；完整 30min/2h 长时门禁待人工执行。
 - **阶段4.2 进行中**：单路 RTSP 输入（`--source-type rtsp --input-env HZW_TEST_RTSP_URL`）已实现连接/读取超时（`stimeout`）、受控断线重连（指数退避）、URL 凭据脱敏、停止信号中断阻塞、输出 PTS 单调；`ctest` + Python 测试全通过，20s 文件回归通过，受控无效地址连接路径验证通过；实流与长时门禁待人工执行。
+- **生产修复候选**：已修复 BMCV 720p 缩放结果与 `h264_bm` 的帧内存契约，板端真实 A 路和软件解码验证正常；尚未激活生产 Release，现网仍为 `industrial-20260728-fdb878c`。详见 `docs/production/video-corruption-fix.md`。
 
 ## 3.5 生产运维文档
 
@@ -51,6 +52,7 @@
 | [维护窗口 Runbook](docs/production/maintenance-window-runbook.md) | VPU 重连修复门禁/步骤/回滚 |
 | [部署审计证据](docs/production/maintenance-window-audit-evidence.md) | 生产部署记录（1eba419/9d449ab/c008eac） |
 | [人工长时测试指南](docs/production/manual-long-run-guide.md) | L1-L4 长测执行步骤和验收标准 |
+| [720p 乱码修复门禁](docs/production/video-corruption-fix.md) | 根因、编码前抓帧、临时 RTMP 灰度与回滚标准 |
 
 **快速操作：**
 - 启动服务：`sudo systemctl start hangzhouwan.target`

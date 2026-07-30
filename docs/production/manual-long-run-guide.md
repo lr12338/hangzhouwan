@@ -64,6 +64,7 @@ hzwctl health
 | A/B fps | `hzwctl status` | A≥9fps, B≥9fps（双路均 10fps 目标） |
 | RTSP 重连 | journalctl 日志 | 无频繁重连 |
 | RTMP 重连 | journalctl 日志 | 无频繁重连 |
+| RTMP 画面 | 软件解码抓帧并人工比对 | 1280×720，内容连续，无彩纹/绿屏/黑屏/平面错位 |
 | business 降级 | JSONL enrichment_status | 偶发 DETECTION_ONLY 后恢复 |
 
 ### 4. 降级恢复验证
@@ -92,6 +93,7 @@ sudo systemctl stop hangzhouwan.target
 - 验证 A/B 双路均输出帧
 - 验证 JSONL 格式合法
 - 验证融合画面有彩色框（绿/黄/红）
+- 分别保存 A/B 软件解码帧；与编码前抓帧场景一致，不得只用 fps 判定成功
 
 ### L2（2 小时）
 - RSS 增长 <10%
@@ -159,6 +161,7 @@ wc -l /var/lib/hangzhouwan/stream_A_events.jsonl 2>/dev/null
 7. A 路 output_fps 持续 <5fps 超过 5 分钟
 8. RTSP/RTMP 重连频率 >2 次/小时
 9. TPU 内存持续增长
+10. 任一路出现随机彩纹、绿屏、黑屏、平面错位或持续软件解码错误
 
 ## 测试报告模板
 
@@ -185,6 +188,7 @@ wc -l /var/lib/hangzhouwan/stream_A_events.jsonl 2>/dev/null
 | video NRestarts | | | | |
 | RTSP 重连 (A) | | | | |
 | RTMP 重连 (A) | | | | |
+| RTMP 画面 (A/B) | | | | |
 | 磁盘 /opt | | | | |
 
 ### 降级恢复验证

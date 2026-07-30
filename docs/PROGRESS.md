@@ -5,16 +5,16 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-07-24（RTMP PTS 修复 + 日志节流 + 长期稳定优化） |
+| 最后更新 | 2026-07-30（1280×720 推流画面内存修复候选） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 分支 | `feat/bm1684-edge-deployment` |
-| HEAD | `4dffaa3` |
+| 画面修复提交 | `ce0724b` |
 | 平台 | BM1684-SOC（chipid `0x1684`），libsophon 0.4.9，sophon-ffmpeg 0.8.0 |
-| 生产 Release | `log-throttle-20260724-c008eac`（`/opt/hangzhouwan/current`） |
-| previous | `vpu-rtmp-pts-fix-20260724-9d449ab` |
+| 生产 Release | `industrial-20260728-fdb878c`（`/opt/hangzhouwan/current`） |
+| previous | `industrial-20260728-fdb878c`（当前无独立回滚版本） |
 | 系统状态 | 🟡 生产运行中（A 路 HEALTHY，B 路 DEGRADED -- 摄像机 301 通道取流不稳） |
-| Python 测试 | `python3 -m pytest -q` -> **159 passed** |
-| C++ 测试 | `cd build && ctest` -> **16/16 passed** |
+| Python 测试 | `python3 -m pytest -q` -> **193 passed** |
+| CTest | `cd build && ctest` -> **17/17 passed**（含稳定性脚本） |
 | 开机自启 | `hangzhouwan.target` enabled（断电自启） |
 | journald | SystemMaxUse=200M + MaxRetentionSec=7day |
 
@@ -24,6 +24,7 @@
 
 | 日期 | Release | 提交 | 内容 |
 |---|---|---|---|
+| 2026-07-28 | `industrial-20260728-fdb878c` | `fdb878c` | 单机工业加固、服务 PID 验证；当前生产版本 |
 | 2026-07-24 | `log-throttle-20260724-c008eac` | `c008eac` | RTMP 重连日志节流（每10次汇总1条，-80%日志量） |
 | 2026-07-24 | `vpu-rtmp-pts-fix-20260724-9d449ab` | `9d449ab` | 修复 RTMP muxer-only 重连 PTS 重置致推流自循环 |
 | 2026-07-24 | `vpu-reconnect-health-20260724-1eba419` | `1eba419` | 健康判定 v2（重连宽限+防抖+阈值集中配置） |
@@ -34,6 +35,16 @@
 ---
 
 ## 关键修复记录
+
+### 1280×720 推流乱码修复（`ce0724b`，待发布）
+- **根因**：BMCV 缩放像素在设备内存，旧代码却向 `h264_bm` 提交未填充的
+  主机平面和手工 `data[4..6]`，DMA 输入契约不成立。
+- **修复**：缩放后回拷标准主机 YUV420P `AVFrame`，编码器使用
+  `is_dma_buffer=0`，并增加尺寸/格式/平面校验和一次性编码前抓帧。
+- **验证**：A 路真实 2560×1440 RTSP 到本地 1280×720 硬编、软件解码正常；
+  Python 193/193、CTest 17/17（含稳定性脚本）通过。
+- **部署状态**：未构建/未激活生产 Release；须按
+  [`production/video-corruption-fix.md`](production/video-corruption-fix.md) 完成临时 Key 灰度。
 
 ### RTMP 推流自循环修复（9d449ab）
 - **根因**：`1a1a7b2` 将 RTMP 重连改为 muxer-only（保留编码器）但遗留 `pts_.reset()`，
@@ -55,6 +66,7 @@
 
 | 项 | 状态 | 说明 |
 |---|---|---|
+| 720p 乱码修复生产灰度 | ⏳ | 需独立 previous、临时 RTMP Key、双路编码前/解码帧 G8 验证 |
 | B 路摄像机 301 通道 | 🔶 | 取流灾难性不稳（`最近输入` 最大 80s），需排查摄像机端 |
 | RTMP 服务器丢连接 | 🔶 | 双路 ~15-18/min 重连，服务器约每 3.5s 丢连接，待排查 |
 | G1 真实 RTSP 100 轮 | ⏳ | 环境无真实断流源，风险豁免待补 |
