@@ -11,6 +11,9 @@ Type=simple
 User=hangzhouwan-video
 Group=hangzhouwan
 WorkingDirectory=/opt/hangzhouwan/current
+# Disabled by default. Set a writable directory in video.env only during a
+# maintenance-window visual check; each stream writes one 1280x720 YUV frame.
+Environment=HZW_PREENCODE_DUMP_DIR=
 EnvironmentFile=/etc/hangzhouwan/video.env
 ExecStartPre=/opt/hangzhouwan/current/bin/hzwctl \
   preflight --release /opt/hangzhouwan/current \

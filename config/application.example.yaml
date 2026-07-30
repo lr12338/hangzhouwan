@@ -26,6 +26,7 @@ streams:
     coordinate_model: ""          # 0121_random_forest_model.pkl 路径，由部署注入
     inference_fps: 5
     output_fps: 10
+    # 仅在编码前由 BMCV 缩放；h264_bm 接收尺寸一致的主机 YUV420P 帧。
     output_width: 1280
     output_height: 720
     output_bitrate_kbps: 1200
@@ -39,6 +40,7 @@ streams:
     coordinate_model: ""          # beishang_x-l.pkl 路径，由部署注入
     inference_fps: 5
     output_fps: 10
+    # 与 A 路相同，编码器不会自动把源分辨率缩放到该尺寸。
     output_width: 1280
     output_height: 720
     output_bitrate_kbps: 1200

@@ -2,8 +2,10 @@
 #include "pipeline/single_stream_pipeline.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -18,6 +20,36 @@ int64_t now_ms() {
       .count();
 }
 double ms_between(int64_t a, int64_t b) { return static_cast<double>(b - a); }
+
+bool dump_yuv420p_frame(const AVFrame* frame, const std::string& path,
+                        std::string& err) {
+  if (!frame || frame->format != AV_PIX_FMT_YUV420P ||
+      !frame->data[0] || !frame->data[1] || !frame->data[2]) {
+    err = "仅支持有效的主机 YUV420P 帧";
+    return false;
+  }
+  FILE* fp = std::fopen(path.c_str(), "wb");
+  if (!fp) {
+    err = std::string("无法创建诊断帧: ") + std::strerror(errno);
+    return false;
+  }
+  bool ok = true;
+  for (int plane = 0; plane < 3 && ok; ++plane) {
+    const int width = plane == 0 ? frame->width : frame->width / 2;
+    const int height = plane == 0 ? frame->height : frame->height / 2;
+    for (int y = 0; y < height; ++y) {
+      const uint8_t* row = frame->data[plane] + y * frame->linesize[plane];
+      if (std::fwrite(row, 1, static_cast<size_t>(width), fp) !=
+          static_cast<size_t>(width)) {
+        ok = false;
+        break;
+      }
+    }
+  }
+  if (std::fclose(fp) != 0) ok = false;
+  if (!ok) err = "写入诊断帧失败";
+  return ok;
+}
 
 // JSON 字符串转义（用于 JSONL 输出）。
 std::string escape_json_str(const std::string& s) {
@@ -357,7 +389,7 @@ int SingleStreamPipeline::run(const PipelineConfig& cfg) {
   if (!sink_.open(cfg_.output_path, cfg_.output_width, cfg_.output_height,
                   cfg_.output_fps,
                   cfg_.bitrate_kbps, cfg_.gop, cfg_.device, cfg_.encoder,
-                  cfg_.sink_type, true,
+                  cfg_.sink_type, !resize_output,
                   resize_output ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_NV12, err)) {
     return fail_initialization(
         sink_.resource_fatal()
@@ -626,6 +658,9 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
   const bool bmcv_draw = (cfg.draw_mode == "bmcv");
   const bool cpu_pre = (cfg.preprocess == "cpu");
   const bool bmcv_pre = (cfg.preprocess == "bmcv" && bmcv_.ready());
+  const char* dump_dir_env = std::getenv("HZW_PREENCODE_DUMP_DIR");
+  const std::string dump_dir = dump_dir_env ? dump_dir_env : "";
+  bool dump_attempted = false;
 
   SwsContext* nv12_to_rgb = nullptr;
   SwsContext* rgb_to_nv12 = nullptr;
@@ -927,7 +962,7 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       const int64_t pts = vf.pts;
       const int64_t capture_time_ms = vf.capture_time_ms;
       const int source_epoch = vf.source_epoch;
-      vf.release();  // 归还解码器帧；缩放 DMA 帧由 FFmpeg 引用计数独立持有。
+      vf.release();  // 归还解码器帧；缩放主机帧由 FFmpeg 引用计数独立持有。
       vf.sequence = sequence;
       vf.pts = pts;
       vf.capture_time_ms = capture_time_ms;
@@ -936,6 +971,26 @@ void SingleStreamPipeline::process_loop(const PipelineConfig& cfg) {
       vf.height = cfg.output_height;
       vf.frame = scaled;
       f = scaled;
+
+      // 维护诊断开关：仅导出本次进程的第一张编码前主机帧，不影响正常推流。
+      if (!dump_dir.empty() && !dump_attempted) {
+        dump_attempted = true;
+        const std::string stream_name =
+            (cfg.stream_id == "A" || cfg.stream_id == "B") ? cfg.stream_id : "stream";
+        const std::string dump_path = dump_dir + "/preencode_" + stream_name + "_" +
+                                      std::to_string(cfg.output_width) + "x" +
+                                      std::to_string(cfg.output_height) + ".yuv";
+        std::string dump_err;
+        if (dump_yuv420p_frame(f, dump_path, dump_err)) {
+          std::fprintf(stdout, "信息 | 编码前抓帧 | [%s] 已写入 %s\n",
+                       stream_name.c_str(), dump_path.c_str());
+        } else {
+          std::fprintf(stderr, "警告 | 编码前抓帧 | [%s] %s\n",
+                       stream_name.c_str(), dump_err.c_str());
+        }
+        std::fflush(stdout);
+        std::fflush(stderr);
+      }
     }
 
     const int64_t e2e = now_ms() - vf.capture_time_ms;

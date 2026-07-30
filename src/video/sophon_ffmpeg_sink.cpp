@@ -106,9 +106,9 @@ bool SophonVideoSink::open(const std::string& path, int width, int height, int f
       return false;
     }
   }
-  std::fprintf(stdout, "信息 | 视频编码 | 编码器：%s 容器：%s %dx%d %dfps %dkbps gop=%d sink=%s\n",
+  std::fprintf(stdout, "信息 | 视频编码 | 编码器：%s 容器：%s %dx%d %dfps %dkbps gop=%d sink=%s input=%s\n",
                encoder_name_.c_str(), container_.c_str(), width, height, fps,
-               bitrate_kbps, gop, sink_type_.c_str());
+               bitrate_kbps, gop, sink_type_.c_str(), input_is_dma ? "dma" : "host");
   std::fflush(stdout);
   return true;
 }
@@ -418,6 +418,27 @@ bool SophonVideoSink::write(VideoFrame& vf, std::string& err) {
   if (!vf.frame) {
     err = "空帧";
     return false;
+  }
+  if (vf.frame->width != enc_->width || vf.frame->height != enc_->height ||
+      vf.frame->format != enc_->pix_fmt) {
+    err = "编码输入帧尺寸或像素格式与编码器不一致";
+    return false;
+  }
+  if (saved_input_is_dma_) {
+    const bool nv12_dma = vf.frame->data[4] && vf.frame->data[5] &&
+                          vf.frame->linesize[4] > 0 && vf.frame->linesize[5] > 0;
+    if (!nv12_dma) {
+      err = "DMA编码输入缺少有效设备平面";
+      return false;
+    }
+  } else {
+    const bool host_yuv420p = vf.frame->data[0] && vf.frame->data[1] &&
+                              vf.frame->data[2] && vf.frame->linesize[0] > 0 &&
+                              vf.frame->linesize[1] > 0 && vf.frame->linesize[2] > 0;
+    if (!host_yuv420p) {
+      err = "主机编码输入缺少有效YUV420P平面";
+      return false;
+    }
   }
   // 按输出帧序重置 pts（编码器 time_base = 1/fps）；忽略源 PTS，保证输出单调。
   vf.frame->pts = pts_.next();

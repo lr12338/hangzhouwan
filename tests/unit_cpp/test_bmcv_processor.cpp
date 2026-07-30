@@ -199,12 +199,27 @@ int main() {
             "缩放输出尺寸为 1280x720");
       check(scaled->format == AV_PIX_FMT_YUV420P,
             "缩放输出格式为 YUV420P");
-      check(scaled->data[4] != nullptr && scaled->data[5] != nullptr &&
-                scaled->data[6] != nullptr,
-            "缩放输出携带三个 DMA 设备平面");
-      check(scaled->buf[0] != nullptr && scaled->buf[1] != nullptr &&
-                scaled->buf[2] != nullptr,
-            "缩放输出具有完整引用计数生命周期");
+      check(scaled->data[0] != nullptr && scaled->data[1] != nullptr &&
+                scaled->data[2] != nullptr,
+            "缩放输出携带三个主机像素平面");
+      check(scaled->data[4] == nullptr && scaled->data[5] == nullptr &&
+                scaled->data[6] == nullptr,
+            "缩放输出不伪造 DMA 设备平面");
+      check(scaled->buf[0] != nullptr,
+            "缩放输出具有 FFmpeg 引用计数生命周期");
+      check(scaled->linesize[0] >= 1280 && scaled->linesize[1] >= 640 &&
+                scaled->linesize[2] >= 640,
+            "缩放输出平面步长有效");
+      bool luma_has_content = false;
+      for (int y = 0; y < scaled->height && !luma_has_content; ++y) {
+        for (int x = 0; x < scaled->width; ++x) {
+          if (scaled->data[0][y * scaled->linesize[0] + x] != 0) {
+            luma_has_content = true;
+            break;
+          }
+        }
+      }
+      check(luma_has_content, "缩放输出包含真实亮度像素");
       av_frame_free(&scaled);
     }
   }

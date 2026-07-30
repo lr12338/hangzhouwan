@@ -111,6 +111,14 @@ class VideoServiceTest(unittest.TestCase):
                      "/data/hangzhouwan/monitor"):
             self.assertIn(path, self.content)
 
+    def test_preencode_dump_is_disabled_by_default_and_env_overridable(self):
+        default = "Environment=HZW_PREENCODE_DUMP_DIR="
+        env_file = "EnvironmentFile=/etc/hangzhouwan/video.env"
+        self.assertIn(default, self.content)
+        self.assertIn(env_file, self.content)
+        self.assertLess(self.content.index(default), self.content.index(env_file))
+        self.assertIn("/data/hangzhouwan/monitor", self.content)
+
 
 class TmpfilesTest(unittest.TestCase):
     def setUp(self):

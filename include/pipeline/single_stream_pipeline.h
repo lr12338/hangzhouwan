@@ -9,7 +9,7 @@
 //   - 解码线程仅推送"输出帧"（文件模式按 output_fps 抽帧；RTSP 模式按墙钟时间调度），
 //     避免无效预处理堆积。
 //   - 处理线程做 NV12<->RGB(sws) + 预处理(复用 BmrtDetector) + 推理 + 绘框。
-//   - 编码线程消费 AVFrame（bm_image）送硬编并封装（本地文件或 RTMP）。
+//   - 编码线程消费 AVFrame；原尺寸厂商帧走 DMA，缩放帧走标准主机 YUV420P。
 // BmrtDetector 全程只创建一次。响应 SIGINT/SIGTERM/EOF/错误，统一释放资源。
 //
 // 阶段4.3：

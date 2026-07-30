@@ -62,12 +62,12 @@ class BmcvProcessor {
                                const std::vector<ColoredRect>& rects,
                                std::string& err);
 
-  // 绘制完成后的硬件缩放：源 NV12 -> 指定输出 YUV420P，并返回由 FFmpeg
-  // 引用计数管理的设备内存 AVFrame。data[4..6] 携带物理地址，供 h264_bm
-  // 以 is_dma_buffer=1 零拷贝编码；释放 AVFrame 时自动销毁对应 bm_image。
+  // 绘制完成后的硬件缩放：源 NV12 -> 指定输出 YUV420P，并回拷到由 FFmpeg
+  // 引用计数管理的标准主机内存 AVFrame。调用方必须以 is_dma_buffer=0 编码。
   // overlays 非空时先缩放，再按比例映射坐标并在输出设备图像上批量绘制
-  // 矩形，不回写 host。检测/坐标仍保持原始分辨率；结构化详情由
-  // JSONL/MQTT 保留。这样可避免在 2560x1440 上逐框渲染拖垮吞吐。
+  // 矩形，最后随缩放结果统一回拷 host。检测/坐标仍保持原始分辨率；结构化详情由
+  // JSONL/MQTT 保留。这样可避免在 2560x1440 上逐框渲染拖垮吞吐，同时
+  // 避免手工构造的 DMA AVFrame 与 h264_bm 私有内存契约不匹配。
   bool resize_yuv420p(AVFrame* frame, int output_width, int output_height,
                       AVFrame** output, std::string& err,
                       const std::vector<ColoredRect>* overlays = nullptr);
