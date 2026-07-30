@@ -11,8 +11,8 @@
 | 画面修复提交 | `ce0724b` |
 | 本地路径 | `/home/linaro/hangzhouwan` |
 | 平台 | BM1684-SOC（chipid `0x1684`），libsophon 0.4.9，sophon-ffmpeg 0.8.0 |
-| 生产 Release | `industrial-20260728-fdb878c`（`/opt/hangzhouwan/current`，commit `fdb878c`） |
-| previous | `industrial-20260728-fdb878c`（当前无独立回滚版本） |
+| 生产 Release | `video-frame-fix-20260730-9c6cec3`（`/opt/hangzhouwan/current`） |
+| previous | `industrial-20260728-fdb878c` |
 | 系统状态 | A 路 HEALTHY（~10fps），B 路 DEGRADED（摄像机 301 通道取流不稳） |
 
 ## 快速操作
@@ -53,7 +53,7 @@ sudo bash tools/release/rollback_release.sh                  # 回滚
 
 | 提交 | 内容 |
 |---|---|
-| `ce0724b` | 1280×720 缩放帧改为主机 AVFrame，修复 `h264_bm` 输入内存契约；待生产灰度 |
+| `ce0724b` | 1280×720 缩放帧改为主机 AVFrame，修复 `h264_bm` 输入内存契约；已生产激活并通过 A/B 软件解码验证 |
 | `2faf0ad` | 双路恢复与健康状态加固 |
 | `4dffaa3` | docs: 长期稳定优化记录 |
 | `c008eac` | perf: RTMP 重连日志节流（每10次汇总） |
@@ -62,7 +62,7 @@ sudo bash tools/release/rollback_release.sh                  # 回滚
 
 ## 待处理
 
-- 画面修复须先提交并构建候选，准备独立 previous 和临时 RTMP Key，再执行 G8 双路画面对比
+- 画面修复 G8 已通过；继续执行 2-4h/24h 长稳观察
 - B 路摄像机 301 通道取流不稳（`最近输入` 最大 80s 空档）-- 摄像机端问题
 - RTMP 服务器双路并发丢连接（~15-18/min）-- 服务器/网络外部问题
 - G1 真实 RTSP 100 轮 / G5 RTMP 100x / 长稳 2-4h -- 需维护窗口
