@@ -101,6 +101,28 @@ if [ -d "$RELEASE_DIR/systemd" ]; then
   systemd-analyze verify "$SERVICE_DIR"/hangzhouwan*.service \
     "$SERVICE_DIR"/hangzhouwan*.timer "$SERVICE_DIR"/hangzhouwan*.target
   systemctl daemon-reload
+  for unit_path in "$RELEASE_DIR"/systemd/*.service \
+                   "$RELEASE_DIR"/systemd/*.timer \
+                   "$RELEASE_DIR"/systemd/*.target; do
+    [ -e "$unit_path" ] || continue
+    unit_name="$(basename "$unit_path")"
+    if ! cmp -s "$unit_path" "$SERVICE_DIR/$unit_name"; then
+      echo "错误: systemd 单元复制后不一致: $unit_name" >&2
+      exit 3
+    fi
+    if [ "$(systemctl show "$unit_name" -p LoadState --value)" != "loaded" ]; then
+      echo "错误: systemd 单元未加载: $unit_name" >&2
+      exit 3
+    fi
+  done
+  target_wants="$(systemctl show hangzhouwan.target -p Wants --value)"
+  case " $target_wants " in
+    *" hangzhouwan-maintenance-recovery.timer "*) ;;
+    *)
+      echo "错误: hangzhouwan.target 未加载恢复 timer 依赖" >&2
+      exit 3
+      ;;
+  esac
   echo "  systemd 单元已安装（未 enable）"
 fi
 

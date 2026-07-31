@@ -22,7 +22,9 @@ from .maintenance_recovery import (
     reset_failed,
     schedule_recovery,
     stop_services,
+    current_availability,
 )
+from .availability import HEALTHY, OPERATIONAL_DEGRADED
 
 LOCK_PATH = "/run/hangzhouwan/maintenance.lock"
 HZWCTL = "/opt/hangzhouwan/current/bin/hzwctl"
@@ -123,7 +125,14 @@ def main():
             else "maintenance_gate_failed")
         if post_diagnostic:
             recovery_details["post_diagnostic"] = post_diagnostic
+        availability = None
+        availability_details = {}
         if mutation_started:
+            availability, availability_details = current_availability(doc)
+            recovery_details["availability"] = availability
+            recovery_details["availability_details"] = availability_details
+        if (mutation_started
+                and availability not in (HEALTHY, OPERATIONAL_DEGRADED)):
             stopped_cleanly = stop_services()
             reset_failed()
             recovery_details["stopped_cleanly"] = stopped_cleanly
@@ -135,7 +144,10 @@ def main():
         if os.path.ismount("/data"):
             schedule_recovery(str(exc), recovery_details)
             arm_recovery_timer()
-        emit("daily_maintenance_failed", "critical", str(exc),
+        degraded = availability == OPERATIONAL_DEGRADED
+        emit("daily_maintenance_degraded" if degraded
+             else "daily_maintenance_failed",
+             "warning" if degraded else "critical", str(exc),
              recovery_details)
         return 1
     finally:

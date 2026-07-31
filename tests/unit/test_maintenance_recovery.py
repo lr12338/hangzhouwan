@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from services.monitoring import maintenance_recovery as recovery
+from services.monitoring.availability import OPERATIONAL_DEGRADED, UNAVAILABLE
 
 
 class DummyPublisher:
@@ -63,6 +64,8 @@ class MaintenanceRecoveryStateTest(unittest.TestCase):
                     return_value=({}, DummyAlerts(), DummyPublisher())), \
                 mock.patch.object(recovery, "recovery_gate",
                                   return_value=gate), \
+                mock.patch.object(recovery, "current_availability",
+                                  return_value=(UNAVAILABLE, {})), \
                 mock.patch.object(recovery, "collect_diagnostics",
                                   return_value="/data/diag.txt"), \
                 mock.patch.object(recovery, "stop_services",
@@ -97,6 +100,44 @@ class MaintenanceRecoveryStateTest(unittest.TestCase):
         state = recovery.load_recovery_state()
         self.assertEqual(state["status"], "PENDING")
         self.assertEqual(state["restart_attempts"], 1)
+
+    def test_operational_degraded_does_not_restart(self):
+        recovery.schedule_recovery("failure", epoch=100)
+        details = {"business_healthy": True, "operational_streams": ["A"]}
+        with mock.patch.object(sys, "argv", ["maintenance_recovery"]), \
+                mock.patch.object(
+                    recovery, "_publisher",
+                    return_value=({}, DummyAlerts(), DummyPublisher())), \
+                mock.patch.object(recovery, "recovery_gate",
+                                  return_value=(True, "ok")), \
+                mock.patch.object(recovery, "current_availability",
+                                  return_value=(OPERATIONAL_DEGRADED, details)), \
+                mock.patch.object(recovery, "stop_services") as stop, \
+                mock.patch.object(recovery, "_strict_start") as start:
+            self.assertEqual(recovery.main(), 0)
+        stop.assert_not_called()
+        start.assert_not_called()
+        state = recovery.load_recovery_state()
+        self.assertEqual(state["last_gate"], "operational_degraded")
+
+    def test_business_only_failure_does_not_restart_video(self):
+        recovery.schedule_recovery("failure", epoch=100)
+        degraded = (OPERATIONAL_DEGRADED,
+                    {"business_healthy": False, "operational_streams": ["A"]})
+        with mock.patch.object(sys, "argv", ["maintenance_recovery"]), \
+                mock.patch.object(
+                    recovery, "_publisher",
+                    return_value=({}, DummyAlerts(), DummyPublisher())), \
+                mock.patch.object(recovery, "recovery_gate",
+                                  return_value=(True, "ok")), \
+                mock.patch.object(recovery, "current_availability",
+                                  return_value=degraded), \
+                mock.patch.object(recovery, "recover_business_only",
+                                  return_value=False) as business, \
+                mock.patch.object(recovery, "stop_services") as stop:
+            self.assertEqual(recovery.main(), 0)
+        business.assert_called_once()
+        stop.assert_not_called()
 
     def test_no_pending_state_is_noop(self):
         with mock.patch.object(sys, "argv", ["maintenance_recovery"]), \

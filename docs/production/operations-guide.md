@@ -144,16 +144,15 @@ sudo systemctl stop hangzhouwan-business.service
 1. 获取维护锁，保存诊断，检查 `/data`、网络和上游端口；
 2. 清除限流后重启 Business，并验证 Sidecar；
 3. 重启 Video，连续三次验证 A/B 真实输出和推理；
-4. 180 秒内未完成则保存诊断、停止 Video/Business 并进入持久恢复状态；
-5. 恢复 timer 每 30 分钟检查一次，RTSP/RTMP 或磁盘门禁失败时不重启，
-   门禁通过后重建 Business/Video，直到连续三次严格健康。
+4. 180 秒内未达严格健康则保存诊断并进入持久恢复状态；至少一路仍有
+   RTSP/RTMP、输出和推理时保持降级运行，只有全部不可用或资源致命时才全停；
+5. 恢复 timer 每 30 分钟检查一次。降级可用时只告警和复查，Business
+   单独失败时只重启 Business；完全不可用时才重建 Business/Video。
 
 安装并启用：
 
 ```bash
-sudo cp deploy/systemd/hangzhouwan-maintenance-restart.{service,timer} /etc/systemd/system/
-sudo cp deploy/systemd/hangzhouwan-maintenance-recovery.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
+sudo bash tools/release/install_release.sh /opt/hangzhouwan/current
 sudo systemctl enable --now hangzhouwan-maintenance-restart.timer
 sudo systemctl enable --now hangzhouwan-maintenance-recovery.timer
 systemctl list-timers 'hangzhouwan-maintenance-*'
@@ -162,6 +161,8 @@ systemctl list-timers 'hangzhouwan-maintenance-*'
 升级该版本前，必须将 `/etc/hangzhouwan/application.yaml` 的
 `health.stream_healthy_fps` 更新为 `9`，并补齐示例中的根盘、恢复间隔和
 诊断保留配置；生产预检会拒绝仍使用 7fps 健康线的配置。
+`hzwctl wait-health` 始终用于严格验收；故障恢复现场可使用
+`hzwctl wait-operational` 判断至少一路数据面是否仍可服务。
 
 修改执行时间后，执行 `sudo systemctl daemon-reload && sudo systemctl restart
 hangzhouwan-maintenance-restart.timer`。临时手动触发可运行：
@@ -523,20 +524,24 @@ cat /opt/hangzhouwan/current/manifest.json
 # 1. 验证候选 Release
 bash tools/release/verify_release.sh <candidate-release>
 
-# 2. 激活（含预检、原子切换、重启、readiness、60s smoke、自动回滚）
+# 2. 安装并核对候选 systemd 单元（不自动启动）
+sudo bash tools/release/install_release.sh <candidate-release>
+
+# 3. 激活（含预检、原子切换、重启、readiness、60s smoke、自动回滚）
 sudo bash tools/release/activate_release.sh <candidate-release>
 ```
 
 激活流程：
 1. **verify**：SHA256 + manifest 完整性校验
-2. **preflight**：离线 + 激活条件预检（不读旧 current）
-3. **离线 smoke**：VERSION 可读、dual_stream_app 可执行
-4. **原子切换**：`mv -T` 原子替换 current（旧 current 保存为 previous）
-5. **restart**：重启 `hangzhouwan.target`
-6. **wait-business**：等待 Business readiness（30s 超时）
-7. **wait-video**：等待 Video readiness（60s 超时）
-8. **60s smoke**：持续 60 秒冒烟检查
-9. **失败自动回滚**：任一步骤失败，current 切回 previous，重启服务
+2. **unit drift**：确认候选 unit 已安装且与 `/etc/systemd/system` 完全一致
+3. **preflight**：离线 + 激活条件预检（不读旧 current）
+4. **离线 smoke**：VERSION 可读、dual_stream_app 可执行
+5. **原子切换**：`mv -T` 原子替换 current（旧 current 保存为 previous）
+6. **restart**：重启 `hangzhouwan.target`
+7. **wait-business**：等待 Business readiness（30s 超时）
+8. **wait-health**：严格等待 A/B 全链路健康
+9. **60s smoke**：持续 60 秒冒烟检查
+10. **失败自动回滚**：任一步骤失败，current 切回 previous，重启服务
 
 确认升级成功：
 

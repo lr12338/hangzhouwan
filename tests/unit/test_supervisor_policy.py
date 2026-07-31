@@ -1,6 +1,6 @@
 import unittest
 
-from services.monitoring.supervisor import RecoveryPolicy
+from services.monitoring.supervisor import RecoveryPolicy, mqtt_reason_code_value
 
 
 class RecoveryPolicyTest(unittest.TestCase):
@@ -35,6 +35,14 @@ class RecoveryPolicyTest(unittest.TestCase):
         allowed, reason = policy.should_recover(90060)
         self.assertTrue(allowed)
         self.assertEqual(reason, "confirmed_failure")
+
+    def test_paho_v1_and_v2_reason_codes(self):
+        class ReasonCode:
+            value = 0
+
+        self.assertEqual(mqtt_reason_code_value(0), 0)
+        self.assertEqual(mqtt_reason_code_value(ReasonCode()), 0)
+        self.assertEqual(mqtt_reason_code_value(object()), -1)
 
 
 if __name__ == "__main__":

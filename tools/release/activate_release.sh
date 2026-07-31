@@ -215,6 +215,31 @@ if ! bash "${SCRIPT_DIR}/verify_release.sh" "$RELEASE_DIR" >/dev/null 2>&1; then
 fi
 echo "  ✅ Release 验证通过"
 
+# Candidate code may depend on new recovery units. Refuse to switch the
+# immutable current link until every packaged base unit is installed exactly.
+echo "[1.1/10] 核对现场 systemd 单元..."
+UNIT_DRIFT=false
+for unit_path in "$RELEASE_DIR"/systemd/*.service \
+                 "$RELEASE_DIR"/systemd/*.timer \
+                 "$RELEASE_DIR"/systemd/*.target; do
+  [ -e "$unit_path" ] || continue
+  unit_name="$(basename "$unit_path")"
+  installed="/etc/systemd/system/$unit_name"
+  if ! sudo test -f "$installed"; then
+    echo "  ❌ 缺失: $installed"
+    UNIT_DRIFT=true
+  elif ! sudo cmp -s "$unit_path" "$installed"; then
+    echo "  ❌ 漂移: $installed"
+    UNIT_DRIFT=true
+  fi
+done
+if [ "$UNIT_DRIFT" = true ]; then
+  echo "  ❌ systemd 单元未同步，拒绝激活"
+  echo "  请先执行: sudo bash tools/release/install_release.sh $RELEASE_DIR"
+  exit 4
+fi
+echo "  ✅ systemd 单元与候选 Release 一致"
+
 # ---------------------------------------------------------------------------
 # 2. candidate preflight（离线 + 激活条件）- hzwctl 缺失硬失败
 # ---------------------------------------------------------------------------

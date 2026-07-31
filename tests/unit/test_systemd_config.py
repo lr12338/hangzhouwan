@@ -228,6 +228,8 @@ class MaintenanceRecoveryTest(unittest.TestCase):
 
     def test_target_starts_recovery_timer(self):
         self.assertIn("hangzhouwan-maintenance-recovery.timer", self.target)
+        self.assertIn("Wants=", self.target)
+        self.assertNotIn("Requires=", self.target)
 
 
 class RestartStormPreventionTest(unittest.TestCase):

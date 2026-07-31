@@ -16,6 +16,13 @@ from .supervisor import (
     MqttAlertPublisher,
     load_config,
     upstream_reachable,
+    query_business,
+    query_video,
+)
+from .availability import (
+    HEALTHY,
+    OPERATIONAL_DEGRADED,
+    classify_availability,
 )
 
 MONITOR_DIR = "/data/hangzhouwan/monitor"
@@ -193,6 +200,18 @@ def recovery_gate(doc):
     return True, "ok"
 
 
+def current_availability(doc):
+    return classify_availability(query_video(), query_business(), doc)
+
+
+def recover_business_only():
+    """Recover enrichment without interrupting a usable video data plane."""
+    _run(["systemctl", "reset-failed", BUSINESS_SERVICE], 10)
+    if not _run(["systemctl", "restart", BUSINESS_SERVICE], 45):
+        return False
+    return _run([HZWCTL, "wait-business", "--timeout", "45"], 50)
+
+
 def _strict_start():
     if not _run(["systemctl", "start", BUSINESS_SERVICE], 45):
         return False, "business_start_failed"
@@ -273,6 +292,51 @@ def main():
             _atomic_write(STATE_PATH, state)
             return 0
 
+        availability, availability_details = current_availability(doc)
+        state["availability"] = availability
+        state["availability_details"] = availability_details
+        if availability == HEALTHY:
+            _emit(alerts, publisher, "maintenance_recovery_completed", "info",
+                  "Business 与 Video 已恢复严格健康",
+                  {"restart_attempts": state.get("restart_attempts", 0),
+                   "first_failed_at": state.get("first_failed_at")})
+            try:
+                os.unlink(STATE_PATH)
+            except FileNotFoundError:
+                pass
+            return 0
+        if availability == OPERATIONAL_DEGRADED:
+            if not availability_details.get("business_healthy"):
+                recover_business_only()
+                availability, availability_details = current_availability(doc)
+                state["availability"] = availability
+                state["availability_details"] = availability_details
+                if availability == HEALTHY:
+                    _emit(
+                        alerts, publisher, "maintenance_recovery_completed",
+                        "info", "Business 与 Video 已恢复严格健康",
+                        {"restart_attempts": state.get("restart_attempts", 0),
+                         "first_failed_at": state.get("first_failed_at")})
+                    try:
+                        os.unlink(STATE_PATH)
+                    except FileNotFoundError:
+                        pass
+                    return 0
+            should_alert = (
+                prior_gate != "operational_degraded"
+                or now - int(state.get("last_alert_at", 0)) >=
+                alert_repeat_seconds
+            )
+            state["last_gate"] = "operational_degraded"
+            if should_alert:
+                state["last_alert_at"] = now
+                _emit(
+                    alerts, publisher, "maintenance_recovery_degraded",
+                    "warning", "数据面降级可用，保持运行并继续复查",
+                    availability_details)
+            _atomic_write(STATE_PATH, state)
+            return 0
+
         diagnostic = collect_diagnostics("recovery_pre")
         if diagnostic:
             state["last_diagnostic"] = diagnostic
@@ -303,22 +367,44 @@ def main():
             return 0
 
         post = collect_diagnostics("recovery_post")
-        stop_services()
-        reset_failed()
+        availability, availability_details = current_availability(doc)
+        if availability == HEALTHY:
+            _emit(alerts, publisher, "maintenance_recovery_completed", "info",
+                  "Business 与 Video 已恢复严格健康",
+                  {"restart_attempts": state["restart_attempts"],
+                   "first_failed_at": state.get("first_failed_at")})
+            try:
+                os.unlink(STATE_PATH)
+            except FileNotFoundError:
+                pass
+            return 0
+        if availability != OPERATIONAL_DEGRADED:
+            stop_services()
+            reset_failed()
         state["reason"] = reason
-        state["last_gate"] = "restart_failed"
+        state["availability"] = availability
+        state["availability_details"] = availability_details
+        state["last_gate"] = (
+            "operational_degraded" if availability == OPERATIONAL_DEGRADED
+            else "restart_failed")
         state["last_checked_at"] = int(time.time())
         state["next_attempt_at"] = state["last_checked_at"] + retry_seconds
         if post:
             state["last_diagnostic"] = post
         state["last_alert_at"] = state["last_checked_at"]
         _atomic_write(STATE_PATH, state)
-        _emit(alerts, publisher, "maintenance_recovery_failed", "critical",
-              "本轮完整恢复失败，30分钟后重试",
+        degraded = availability == OPERATIONAL_DEGRADED
+        _emit(alerts, publisher,
+              "maintenance_recovery_degraded" if degraded
+              else "maintenance_recovery_failed",
+              "warning" if degraded else "critical",
+              "恢复后数据面降级可用，保持运行并继续复查" if degraded
+              else "本轮完整恢复失败，30分钟后重试",
               {"reason": reason,
                "restart_attempts": state["restart_attempts"],
-               "diagnostic": state.get("last_diagnostic", "")})
-        return 1
+               "diagnostic": state.get("last_diagnostic", ""),
+               "availability": availability_details})
+        return 0 if degraded else 1
     finally:
         try:
             os.unlink(LOCK_PATH)

@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from services.monitoring import controlled_maintenance as maintenance
+from services.monitoring.availability import OPERATIONAL_DEGRADED, UNAVAILABLE
 
 
 class DummyCompleted:
@@ -66,6 +67,8 @@ class ControlledMaintenanceRecoveryTest(unittest.TestCase):
                 mock.patch.object(
                     maintenance, "collect_diagnostics",
                     return_value="/data/post.txt"), \
+                mock.patch.object(maintenance, "current_availability",
+                                  return_value=(UNAVAILABLE, {})), \
                 mock.patch.object(maintenance, "stop_services",
                                   return_value=True) as stop, \
                 mock.patch.object(maintenance, "reset_failed") as reset, \
@@ -74,6 +77,29 @@ class ControlledMaintenanceRecoveryTest(unittest.TestCase):
             self.assertEqual(maintenance.main(), 1)
         stop.assert_called_once()
         reset.assert_called_once()
+        schedule.assert_called_once()
+        arm.assert_called_once()
+
+    def test_health_failure_keeps_operational_data_plane_running(self):
+        calls = iter([True, True, True, False])
+        details = {"operational_streams": ["A"], "business_healthy": True}
+        with mock.patch.object(maintenance, "upstream_reachable",
+                               return_value=True), \
+                mock.patch.object(
+                    maintenance, "run",
+                    side_effect=lambda *_args, **_kwargs: next(calls)), \
+                mock.patch.object(
+                    maintenance, "collect_diagnostics",
+                    return_value="/data/post.txt"), \
+                mock.patch.object(maintenance, "current_availability",
+                                  return_value=(OPERATIONAL_DEGRADED, details)), \
+                mock.patch.object(maintenance, "stop_services") as stop, \
+                mock.patch.object(maintenance, "reset_failed") as reset, \
+                mock.patch.object(maintenance, "schedule_recovery") as schedule, \
+                mock.patch.object(maintenance, "arm_recovery_timer") as arm:
+            self.assertEqual(maintenance.main(), 1)
+        stop.assert_not_called()
+        reset.assert_not_called()
         schedule.assert_called_once()
         arm.assert_called_once()
 

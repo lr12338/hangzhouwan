@@ -7,6 +7,7 @@
   status             系统状态汇总（优先读 Video 健康接口）
   health             健康状态（优先读 Video 健康接口）
   wait-health        严格等待 Sidecar、A/B RTSP/RTMP、输出/推理 FPS 就绪
+  wait-operational   等待至少一路数据面达到降级可用
   wait-business      等待 business 就绪
   wait-video         等待 video 服务就绪
   start              启动服务（不自动 enable 生产 systemd）
@@ -797,6 +798,42 @@ def cmd_wait(args):
             time.sleep(1)
         print("❌ video 超时未就绪")
         return 1
+    elif args.service == "operational":
+        degraded_fps_min = float(
+            health_config.get("stream_degraded_fps", 5))
+        print(f"等待降级可用数据面（最长 {timeout}s）...")
+        last_reason = "尚未获得健康数据"
+        while time.time() < deadline:
+            vh = query_video_health("health", timeout=1)
+            storage_ok = vh.get("storage", {}).get("state") in (
+                "OK", "WARNING")
+            resource_fatal = bool(
+                vh.get("resource_fatal")
+                or vh.get("resource", {}).get("fatal"))
+            operational = []
+            for sid in ("A", "B"):
+                stream = vh.get("streams", {}).get(sid, {})
+                if (stream.get("lifecycle", "RUNNING") == "RUNNING"
+                        and stream.get("rtsp_connected")
+                        and stream.get("rtmp_connected")
+                        and float(stream.get("output_fps", 0) or 0)
+                        >= degraded_fps_min
+                        and float(stream.get("inference_fps", 0) or 0) > 0):
+                    operational.append(sid)
+            if (vh.get("available") and storage_ok and not resource_fatal
+                    and operational):
+                print("✅ 数据面可用（运行流: {}，video={}）".format(
+                    ",".join(operational), vh.get("status", "UNKNOWN")))
+                return 0
+            last_reason = (
+                f"video={vh.get('status', vh.get('error', 'UNKNOWN'))} "
+                f"storage={vh.get('storage', {}).get('state')} "
+                f"resource_fatal={resource_fatal} "
+                f"operational={','.join(operational) or 'none'}"
+            )
+            time.sleep(2)
+        print(f"❌ 数据面不可用: {last_reason}")
+        return 1
     else:
         print(f"等待严格健康门禁（最长 {timeout}s）...")
         last_reason = "尚未获得健康数据"
@@ -1056,6 +1093,8 @@ def main():
     w2.add_argument("--timeout", type=int, default=60)
     wh = sub.add_parser("wait-health", help="严格等待全链路健康")
     wh.add_argument("--timeout", type=int, default=180)
+    wo = sub.add_parser("wait-operational", help="等待至少一路数据面降级可用")
+    wo.add_argument("--timeout", type=int, default=90)
     sub.add_parser("start", help="启动服务")
     sub.add_parser("stop", help="停止服务")
     sub.add_parser("restart", help="重启服务")
@@ -1080,6 +1119,7 @@ def main():
         "wait-business": (cmd_wait, argparse.Namespace(service="business", timeout=getattr(args, "timeout", 30))),
         "wait-video": (cmd_wait, argparse.Namespace(service="video", timeout=getattr(args, "timeout", 60))),
         "wait-health": (cmd_wait, argparse.Namespace(service="health", timeout=getattr(args, "timeout", 180))),
+        "wait-operational": (cmd_wait, argparse.Namespace(service="operational", timeout=getattr(args, "timeout", 90))),
         "start": (cmd_start, args),
         "stop": (cmd_stop, args),
         "restart": (cmd_restart, args),

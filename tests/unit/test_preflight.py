@@ -249,6 +249,12 @@ class ActivateReleaseTest(unittest.TestCase):
     def test_has_preflight_step(self):
         self.assertIn("preflight", self.src)
 
+    def test_rejects_systemd_unit_drift_before_switch(self):
+        drift = self.src.index("systemd 单元未同步")
+        switch = self.src.index("sudo mv -T")
+        self.assertLess(drift, switch)
+        self.assertIn("cmp -s", self.src)
+
     def test_has_smoke_step(self):
         self.assertIn("smoke", self.src)
 

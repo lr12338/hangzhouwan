@@ -16,6 +16,8 @@ import threading
 import time
 from urllib.parse import urlparse
 
+from .availability import OPERATIONAL_DEGRADED, classify_availability
+
 try:
     import yaml
 except ImportError:
@@ -30,6 +32,15 @@ MAINTENANCE_RECOVERY_STATE = os.path.join(
     MONITOR_DIR, "maintenance-recovery.json")
 ALERT_PATH = os.path.join(MONITOR_DIR, "alerts.current.jsonl")
 MQTT_SPOOL = os.path.join(MONITOR_DIR, "mqtt-offline.jsonl")
+
+
+def mqtt_reason_code_value(reason_code):
+    """Normalize Paho v1 integers and v2 ReasonCode objects."""
+    value = getattr(reason_code, "value", reason_code)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
 
 
 def now_ms():
@@ -272,7 +283,7 @@ class MqttAlertPublisher:
             self.client = None
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
-        self.connected = int(reason_code) == 0
+        self.connected = mqtt_reason_code_value(reason_code) == 0
         if self.connected:
             self.flush()
 
@@ -433,7 +444,11 @@ def main():
         business_health = query_business()
         socket_ok = health is not None
         status = health.get("status", "FAILED") if health else "FAILED"
-        policy.observe(status, socket_ok, epoch)
+        availability, _ = classify_availability(
+            health, business_health, doc)
+        policy_status = (
+            "DEGRADED" if availability == OPERATIONAL_DEGRADED else status)
+        policy.observe(policy_status, socket_ok, epoch)
         save_policy(policy)
         signature = (status, health.get("health_reason", "") if health
                      else "video health socket unavailable")
