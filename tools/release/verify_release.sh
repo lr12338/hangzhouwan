@@ -81,7 +81,6 @@ fi
 
 # 7. 不可变权限与 Python 运行时独立性
 if [ "$(stat -c '%U:%G' "$RELEASE_DIR")" = "root:root" ] &&
-   [ ! -w "$RELEASE_DIR" ] &&
    ! find "$RELEASE_DIR" \( ! -user root -o ! -group root \) -print -quit |
      grep -q . &&
    ! find "$RELEASE_DIR" \( -type f -o -type d \) -perm /022 \

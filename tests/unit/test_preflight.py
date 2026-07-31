@@ -291,5 +291,15 @@ class ActivateReleaseTest(unittest.TestCase):
         self.assertIn("RESULT_CODE", self.src)
 
 
+class VerifyReleaseTest(unittest.TestCase):
+    def test_permission_check_is_not_root_write_probe(self):
+        script = os.path.normpath(os.path.join(
+            HERE, "..", "..", "tools", "release", "verify_release.sh"))
+        with open(script, encoding="utf-8") as stream:
+            source = stream.read()
+        self.assertNotIn('[ ! -w "$RELEASE_DIR" ]', source)
+        self.assertIn("-perm /022", source)
+
+
 if __name__ == "__main__":
     unittest.main()
