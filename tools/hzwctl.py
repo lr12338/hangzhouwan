@@ -950,17 +950,20 @@ def _load_environment_files(paths):
 
 
 def cmd_upstream_check(args):
-    """激活前只读检查所有启用 RTSP/RTMP 端点，绝不输出 URL/凭据。"""
+    """Probe RTSP handshakes and RTMP TCP endpoints without printing URLs."""
     doc = load_yaml(args.config or DEFAULT_CONFIG)
     if not doc:
         print("错误: 无法加载 application.yaml")
         return 78
     file_environment = _load_environment_files(args.environment_file)
     failures = []
+    operational_streams = []
+    ffprobe = shutil.which("ffprobe")
     for stream in doc.get("streams", []):
         if not stream.get("enabled"):
             continue
         stream_id = stream.get("id", "?")
+        endpoint_ok = {}
         for label, key, default_port in (
                 ("RTSP", "input_url_env", 554),
                 ("RTMP", "output_url_env", 1935)):
@@ -969,6 +972,7 @@ def cmd_upstream_check(args):
             parsed = urlparse(value)
             if not parsed.hostname:
                 failures.append(f"{stream_id}:{label}:missing_endpoint")
+                endpoint_ok[label] = False
                 continue
             try:
                 with socket.create_connection(
@@ -977,11 +981,41 @@ def cmd_upstream_check(args):
                     pass
             except OSError:
                 failures.append(f"{stream_id}:{label}:unreachable")
+                endpoint_ok[label] = False
+                continue
+            endpoint_ok[label] = True
+            if label == "RTSP":
+                if not ffprobe:
+                    failures.append(f"{stream_id}:RTSP:ffprobe_unavailable")
+                    endpoint_ok[label] = False
+                    continue
+                try:
+                    probe = subprocess.run(
+                        [ffprobe, "-v", "error", "-rtsp_transport", "tcp",
+                         "-analyzeduration", "1000000", "-probesize", "500000",
+                         "-select_streams", "v:0", "-show_entries",
+                         "stream=codec_name", "-of", "default=nw=1", value],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=12, check=False)
+                    endpoint_ok[label] = probe.returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    endpoint_ok[label] = False
+                if not endpoint_ok[label]:
+                    failures.append(f"{stream_id}:RTSP:handshake_failed")
+        if endpoint_ok.get("RTSP") and endpoint_ok.get("RTMP"):
+            operational_streams.append(str(stream_id))
+    allow_degraded = bool(getattr(args, "allow_degraded", False))
+    if allow_degraded and operational_streams:
+        suffix = "；降级端点: " + ",".join(failures) if failures else ""
+        print("✅ 至少一路 RTSP 握手和 RTMP 端口可用（运行流: {}，"
+              "URL/凭据已隐藏）{}".format(
+                  ",".join(operational_streams), suffix))
+        return 0
     if failures:
         print("错误: 上游端点门禁失败（URL/凭据已隐藏）: " +
               ",".join(failures))
         return 75
-    print("✅ 所有启用流的 RTSP/RTMP 端口均可达（URL/凭据已隐藏）")
+    print("✅ 所有启用流的 RTSP 握手和 RTMP 端口均可用（URL/凭据已隐藏）")
     return 0
 
 
@@ -1104,6 +1138,9 @@ def main():
     upstream.add_argument(
         "--environment-file", action="append", default=[],
         help="只读加载 systemd EnvironmentFile")
+    upstream.add_argument(
+        "--allow-degraded", action="store_true",
+        help="现场恢复时允许至少一路端到端上游可用")
     sub.add_parser("version", help="版本")
     sub.add_parser("collect-diagnostics", help="收集诊断")
 

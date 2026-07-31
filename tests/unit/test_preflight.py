@@ -255,6 +255,11 @@ class ActivateReleaseTest(unittest.TestCase):
         self.assertLess(drift, switch)
         self.assertIn("cmp -s", self.src)
 
+    def test_operational_recovery_is_distinct_from_strict_acceptance(self):
+        self.assertIn("--operational-recovery", self.src)
+        self.assertIn("wait-operational", self.src)
+        self.assertIn("结果码: 10", self.src)
+
     def test_has_smoke_step(self):
         self.assertIn("smoke", self.src)
 

@@ -5,6 +5,7 @@
 #
 # 用法：
 #   bash tools/release/activate_release.sh <release_dir> [--config <path>] [--no-smoke]
+#       [--operational-recovery]
 #
 # 流程：
 #   1. verify candidate（SHA256 + manifest）
@@ -30,6 +31,7 @@
 #   6   Video 未就绪
 #   7   smoke 失败
 #   8   PID 核验失败（运行的可执行文件不来自候选 Release）
+#   10  现场恢复部署完成（至少一路可用，未通过双路严格发布签收）
 #   50  systemctl restart 失败
 #   90  自动回滚成功但 health 未达标
 #   99  自动回滚失败（严重，需人工介入）
@@ -43,17 +45,19 @@ RELEASE_DIR="${1:-}"
 shift || true
 CONFIG_PATH="/etc/hangzhouwan/application.yaml"
 NO_SMOKE=false
+OPERATIONAL_RECOVERY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG_PATH="$2"; shift 2;;
     --no-smoke) NO_SMOKE=true; shift;;
+    --operational-recovery) OPERATIONAL_RECOVERY=true; shift;;
     *) echo "未知参数: $1"; exit 1;;
   esac
 done
 
 if [ -z "$RELEASE_DIR" ] || [ ! -d "$RELEASE_DIR" ]; then
-  echo "用法: bash tools/release/activate_release.sh <release_dir> [--config <path>] [--no-smoke]"
+  echo "用法: bash tools/release/activate_release.sh <release_dir> [--config <path>] [--no-smoke] [--operational-recovery]"
   exit 1
 fi
 
@@ -256,9 +260,13 @@ fi
 echo "  ✅ 预检通过"
 
 echo "[2.1/10] 检查生产 RTSP/RTMP 端点..."
-if ! sudo "$HZWCTL" upstream-check --config "$CONFIG_PATH" \
+upstream_args=(upstream-check --config "$CONFIG_PATH" \
     --environment-file /etc/hangzhouwan/business.env \
-    --environment-file /etc/hangzhouwan/video.env; then
+    --environment-file /etc/hangzhouwan/video.env)
+if [ "$OPERATIONAL_RECOVERY" = true ]; then
+  upstream_args+=(--allow-degraded)
+fi
+if ! sudo "$HZWCTL" "${upstream_args[@]}"; then
   echo "  ❌ 上游端点不可达，拒绝切换 Release"
   exit 4
 fi
@@ -350,14 +358,24 @@ echo "  ✅ Business 就绪"
 # ---------------------------------------------------------------------------
 # 8. 严格 wait-health
 # ---------------------------------------------------------------------------
-echo "[8/10] 等待 A/B 全链路严格健康..."
-if ! sudo "$HZWCTL_CURRENT" wait-health --timeout 180; then
-  echo "  ❌ 严格健康门禁未通过"
+if [ "$OPERATIONAL_RECOVERY" = true ]; then
+  echo "[8/10] 现场恢复：等待至少一路数据面可用..."
+  wait_command=wait-operational
+else
+  echo "[8/10] 等待 A/B 全链路严格健康..."
+  wait_command=wait-health
+fi
+if ! sudo "$HZWCTL_CURRENT" "$wait_command" --timeout 180; then
+  echo "  ❌ 健康门禁未通过"
   RESULT_CODE=6
   perform_rollback
   exit "$RESULT_CODE"
 fi
-echo "  ✅ A/B 全链路健康"
+if [ "$OPERATIONAL_RECOVERY" = true ]; then
+  echo "  ⚠️  数据面已恢复，但本次不构成双路严格发布签收"
+else
+  echo "  ✅ A/B 全链路健康"
+fi
 
 # ---------------------------------------------------------------------------
 # 9. 60 秒 smoke
@@ -431,12 +449,20 @@ echo "  ✅ PID 核验通过"
 # 成功
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== ✅ 激活成功 ==="
+if [ "$OPERATIONAL_RECOVERY" = true ]; then
+  echo "=== ⚠️  现场恢复部署完成（非严格发布签收） ==="
+else
+  echo "=== ✅ 激活成功 ==="
+fi
 echo "  current -> $(readlink -f "$CURRENT_LINK")"
 if [ -L "$PREVIOUS_LINK" ]; then
   echo "  previous -> $(readlink -f "$PREVIOUS_LINK")"
   echo "  回滚: bash tools/release/rollback_release.sh"
 fi
 echo ""
+if [ "$OPERATIONAL_RECOVERY" = true ]; then
+  echo "结果码: 10 (至少一路可用；双路严格验收未执行)"
+  exit 10
+fi
 echo "结果码: 0 (成功)"
 exit 0

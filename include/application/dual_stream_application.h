@@ -3,7 +3,8 @@
 // DualStreamApplication：A/B 双路并发视频推理应用（阶段4.4）。
 //
 // 管理 two SingleStreamPipeline 实例，各自独立 RTSP/RTMP/推理/编码线程。
-// 全局 SIGINT/SIGTERM 同时停止两路；任一已启用流非零退出时收口整个进程。
+// 全局 SIGINT/SIGTERM 同时停止两路；单路外部端点故障保留健康兄弟流，
+// 设备资源致命或配置错误才收口整个进程。
 // 每路拥有独立 metrics、snapshot 和 source/sink epoch。
 // 日志带 stream_id=A|B 前缀。
 //
@@ -23,6 +24,11 @@
 #include "monitoring/video_health_logic.h"
 
 namespace hzw {
+
+inline bool stream_exit_requires_global_stop(int exit_code) {
+  return exit_code == kPipelineExitHardware ||
+         exit_code == kPipelineExitConfiguration;
+}
 
 struct DualStreamConfig {
   PipelineConfig stream_a;

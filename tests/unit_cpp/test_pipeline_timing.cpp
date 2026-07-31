@@ -2,6 +2,7 @@
 // 管线调度与配置校验单元测试：帧率选择、推理帧为输出帧子集、时间戳单调、非法配置拒绝。
 #include <iostream>
 #include <string>
+#include "application/dual_stream_application.h"
 #include "pipeline/single_stream_pipeline.h"
 
 static int g_failures = 0;
@@ -22,6 +23,12 @@ int main() {
     CHECK(hzw::kPipelineExitHardware == 70);
     CHECK(hzw::kPipelineExitEndpointUnavailable == 75);
     CHECK(hzw::kPipelineExitConfiguration == 78);
+    CHECK(!hzw::stream_exit_requires_global_stop(
+        hzw::kPipelineExitEndpointUnavailable));
+    CHECK(!hzw::stream_exit_requires_global_stop(hzw::kPipelineExitRuntime));
+    CHECK(hzw::stream_exit_requires_global_stop(hzw::kPipelineExitHardware));
+    CHECK(hzw::stream_exit_requires_global_stop(
+        hzw::kPipelineExitConfiguration));
     const std::string redacted = hzw::redact_pipeline_error(
         "open rtsp://camera-user:camera-pass@10.0.0.1/live failed");
     CHECK(redacted.find("camera-user") == std::string::npos);

@@ -29,7 +29,8 @@ class UpstreamCheckTest(unittest.TestCase):
                 "    input_url_env: A_INPUT\n"
                 "    output_url_env: A_OUTPUT\n")
         self.args = argparse.Namespace(
-            config=self.config, environment_file=[self.environment])
+            config=self.config, environment_file=[self.environment],
+            allow_degraded=False)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -43,7 +44,12 @@ class UpstreamCheckTest(unittest.TestCase):
         connection.__enter__.return_value = connection
         with mock.patch.object(
                 HZWCTL.socket, "create_connection",
-                return_value=connection) as create:
+                return_value=connection) as create, \
+                mock.patch.object(HZWCTL.shutil, "which",
+                                  return_value="/usr/bin/ffprobe"), \
+                mock.patch.object(
+                    HZWCTL.subprocess, "run",
+                    return_value=mock.Mock(returncode=0)):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 self.assertEqual(HZWCTL.cmd_upstream_check(self.args), 0)
@@ -58,6 +64,38 @@ class UpstreamCheckTest(unittest.TestCase):
                 HZWCTL.socket, "create_connection") as create:
             self.assertEqual(HZWCTL.cmd_upstream_check(self.args), 75)
         create.assert_not_called()
+
+    def test_allow_degraded_accepts_one_complete_stream(self):
+        with open(self.environment, "w", encoding="utf-8") as stream:
+            stream.write(
+                "A_INPUT=rtsp://user:secret@camera-a/live\n"
+                "A_OUTPUT=rtmp://user:secret@media-a/live\n"
+                "B_INPUT=rtsp://user:secret@camera-b/live\n"
+                "B_OUTPUT=rtmp://user:secret@media-b/live\n")
+        with open(self.config, "a", encoding="utf-8") as stream:
+            stream.write(
+                "  - id: B\n"
+                "    enabled: true\n"
+                "    input_url_env: B_INPUT\n"
+                "    output_url_env: B_OUTPUT\n")
+        self.args.allow_degraded = True
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        with mock.patch.object(
+                HZWCTL.socket, "create_connection",
+                return_value=connection), \
+                mock.patch.object(HZWCTL.shutil, "which",
+                                  return_value="/usr/bin/ffprobe"), \
+                mock.patch.object(
+                    HZWCTL.subprocess, "run",
+                    side_effect=[mock.Mock(returncode=0),
+                                 mock.Mock(returncode=1)]):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(HZWCTL.cmd_upstream_check(self.args), 0)
+        self.assertIn("运行流: A", output.getvalue())
+        self.assertIn("B:RTSP:handshake_failed", output.getvalue())
+        self.assertNotIn("secret", output.getvalue())
 
 
 if __name__ == "__main__":

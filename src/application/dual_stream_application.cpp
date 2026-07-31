@@ -150,12 +150,14 @@ void DualStreamApplication::stream_thread(const PipelineConfig& cfg,
     std::fflush(stderr);
     exit_code.store(kPipelineExitRuntime);
   }
-  // 任一已启用流非零退出都停止双路，避免主进程保持 active 而数据面残缺。
-  if (exit_code.load() != 0) {
-    std::fprintf(stderr, "错误 | 双路 | [%s] 管线退出码=%d，停止双路\n",
-                 cfg.stream_id.c_str(), exit_code.load());
+  const int rc = exit_code.load();
+  if (rc != 0) {
+    const bool global_stop = stream_exit_requires_global_stop(rc);
+    std::fprintf(stderr, "错误 | 双路 | [%s] 管线退出码=%d，%s\n",
+                 cfg.stream_id.c_str(), rc,
+                 global_stop ? "停止双路" : "保留健康兄弟流");
     std::fflush(stderr);
-    request_stop();
+    if (global_stop) request_stop();
   }
 }
 
