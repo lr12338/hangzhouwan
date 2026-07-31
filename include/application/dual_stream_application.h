@@ -30,6 +30,11 @@ inline bool stream_exit_requires_global_stop(int exit_code) {
          exit_code == kPipelineExitConfiguration;
 }
 
+inline bool stream_exit_is_retryable(int exit_code) {
+  return exit_code == kPipelineExitEndpointUnavailable ||
+         exit_code == kPipelineExitRuntime;
+}
+
 struct DualStreamConfig {
   PipelineConfig stream_a;
   PipelineConfig stream_b;
@@ -57,7 +62,8 @@ class DualStreamApplication {
 
  private:
   void stream_thread(const PipelineConfig& cfg, SingleStreamPipeline& pipeline,
-                     std::atomic<int>& exit_code);
+                     std::atomic<int>& exit_code,
+                     const SingleStreamPipeline* peer_pipeline);
   void metrics_loop(const DualStreamConfig& cfg);
 
   SingleStreamPipeline pipeline_a_;

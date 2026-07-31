@@ -202,6 +202,9 @@ std::string SingleStreamPipeline::last_error() const {
 int SingleStreamPipeline::fail_initialization(int code,
                                               const std::string& stage,
                                               const std::string& msg) {
+  sink_.close();
+  source_.close();
+  if (event_writer_) event_writer_->stop();
   exit_code_.store(code);
   set_failure_details(stage, msg);
   lifecycle_.store(static_cast<int>(PipelineLifecycle::EXITED));

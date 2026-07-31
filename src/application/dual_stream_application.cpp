@@ -141,23 +141,47 @@ void DualStreamApplication::request_stop() {
 
 void DualStreamApplication::stream_thread(const PipelineConfig& cfg,
                                           SingleStreamPipeline& pipeline,
-                                          std::atomic<int>& exit_code) {
-  try {
-    exit_code.store(pipeline.run(cfg));
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "错误 | [%s] 线程异常 | %s\n",
-                 cfg.stream_id.c_str(), e.what());
-    std::fflush(stderr);
-    exit_code.store(kPipelineExitRuntime);
-  }
-  const int rc = exit_code.load();
-  if (rc != 0) {
+                                          std::atomic<int>& exit_code,
+                                          const SingleStreamPipeline* peer_pipeline) {
+  constexpr int kRetryDelaySeconds = 30;
+  while (!stop_.load()) {
+    try {
+      exit_code.store(pipeline.run(cfg));
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "错误 | [%s] 线程异常 | %s\n",
+                   cfg.stream_id.c_str(), e.what());
+      std::fflush(stderr);
+      exit_code.store(kPipelineExitRuntime);
+    }
+    const int rc = exit_code.load();
+    if (rc == 0 || stop_.load()) return;
     const bool global_stop = stream_exit_requires_global_stop(rc);
     std::fprintf(stderr, "错误 | 双路 | [%s] 管线退出码=%d，%s\n",
                  cfg.stream_id.c_str(), rc,
                  global_stop ? "停止双路" : "保留健康兄弟流");
     std::fflush(stderr);
-    if (global_stop) request_stop();
+    if (global_stop) {
+      request_stop();
+      return;
+    }
+    if (!stream_exit_is_retryable(rc)) return;
+
+    if (!peer_pipeline ||
+        peer_pipeline->lifecycle() == PipelineLifecycle::EXITED) {
+      std::fprintf(stderr,
+                   "错误 | 双路 | [%s] 所有启用流均不可用，停止进程以进入受控恢复\n",
+                   cfg.stream_id.c_str());
+      std::fflush(stderr);
+      request_stop();
+      return;
+    }
+    std::fprintf(stderr,
+                 "告警 | 双路 | [%s] 将在 %d 秒后单路重试，不中断兄弟流\n",
+                 cfg.stream_id.c_str(), kRetryDelaySeconds);
+    std::fflush(stderr);
+    for (int i = 0; i < kRetryDelaySeconds * 10 && !stop_.load(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
   }
 }
 
@@ -195,12 +219,18 @@ int DualStreamApplication::run(const DualStreamConfig& cfg) {
 
   // A/B 按需启动（单路时不启动另一路）
   if (cfg.run_a) {
-    t_a_ = std::thread([this, &cfg] { stream_thread(cfg.stream_a, pipeline_a_, exit_code_a_); });
+    t_a_ = std::thread([this, &cfg] {
+      stream_thread(cfg.stream_a, pipeline_a_, exit_code_a_,
+                    cfg.run_b ? &pipeline_b_ : nullptr);
+    });
   } else {
     exit_code_a_.store(0);
   }
   if (cfg.run_b) {
-    t_b_ = std::thread([this, &cfg] { stream_thread(cfg.stream_b, pipeline_b_, exit_code_b_); });
+    t_b_ = std::thread([this, &cfg] {
+      stream_thread(cfg.stream_b, pipeline_b_, exit_code_b_,
+                    cfg.run_a ? &pipeline_a_ : nullptr);
+    });
   } else {
     exit_code_b_.store(0);
   }

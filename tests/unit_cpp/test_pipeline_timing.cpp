@@ -29,6 +29,12 @@ int main() {
     CHECK(hzw::stream_exit_requires_global_stop(hzw::kPipelineExitHardware));
     CHECK(hzw::stream_exit_requires_global_stop(
         hzw::kPipelineExitConfiguration));
+    CHECK(hzw::stream_exit_is_retryable(
+        hzw::kPipelineExitEndpointUnavailable));
+    CHECK(hzw::stream_exit_is_retryable(hzw::kPipelineExitRuntime));
+    CHECK(!hzw::stream_exit_is_retryable(hzw::kPipelineExitHardware));
+    CHECK(!hzw::stream_exit_is_retryable(
+        hzw::kPipelineExitConfiguration));
     const std::string redacted = hzw::redact_pipeline_error(
         "open rtsp://camera-user:camera-pass@10.0.0.1/live failed");
     CHECK(redacted.find("camera-user") == std::string::npos);
