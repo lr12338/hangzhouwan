@@ -19,6 +19,10 @@ struct BmcvProcessor::Impl {
   bm_image src_img{};     // NV12 (DDR1)，CSC/resize 输入
   bm_image csc_img{};     // RGB_PACKED 640x640 (DDR0)，CSC+resize 输出
   bm_image draw_img{};    // NV12 (DDR0)，绘制用
+  bm_image crop_rgb{};    // RGB_PACKED (crop 输出，按需创建)
+  bool crop_rgb_valid = false;
+  int crop_w = 0;
+  int crop_h = 0;
   bool images_valid = false;
   bool use_vpp_resize = false;  // 是否使用 VPP resize（640x640 输出）
 
@@ -35,6 +39,9 @@ BmcvProcessor::~BmcvProcessor() {
       bm_image_destroy(p_->csc_img);
       bm_image_destroy(p_->draw_img);
     }
+    if (p_->crop_rgb_valid) {
+      bm_image_destroy(p_->crop_rgb);
+    }
     delete p_;
     p_ = nullptr;
   }
@@ -46,6 +53,10 @@ bool BmcvProcessor::init(void* handle_void, int src_w, int src_h, std::string& e
     bm_image_destroy(p_->csc_img);
     bm_image_destroy(p_->draw_img);
     p_->images_valid = false;
+  }
+  if (p_->crop_rgb_valid) {
+    bm_image_destroy(p_->crop_rgb);
+    p_->crop_rgb_valid = false;
   }
   p_->handle = static_cast<bm_handle_t>(handle_void);
   p_->src_w = src_w;
@@ -189,6 +200,71 @@ bool BmcvProcessor::draw_colored_rectangles(AVFrame* frame,
   st = bm_image_copy_device_to_host(p_->draw_img, dst_planes);
   if (st != BM_SUCCESS) { err = "BMCV draw: D2H 失败"; return false; }
   return true;
+}
+
+bool BmcvProcessor::crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int crop_h,
+                               Image& out, std::string& err) {
+  if (!p_ || !p_->ready) { err = "BMCV crop: 未初始化"; return false; }
+  if (!frame) { err = "BMCV crop: frame 为空"; return false; }
+  if (crop_w <= 0 || crop_h <= 0) { err = "BMCV crop: 尺寸非法"; return false; }
+  // BMCV VPP 对极小输出尺寸不支持（实测 <32px 报 vpp dst width not match）。
+  // 抓拍 bbox 裁剪通常远大于此；过小时返回失败由上层处理，不崩溃。
+  constexpr int kMinCropDim = 32;
+  // clamp 到源边界
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (x + crop_w > p_->src_w) crop_w = p_->src_w - x;
+  if (y + crop_h > p_->src_h) crop_h = p_->src_h - y;
+  if (crop_w <= 0 || crop_h <= 0) { err = "BMCV crop: 裁剪区域越界"; return false; }
+  if (crop_w < kMinCropDim || crop_h < kMinCropDim) {
+    err = "BMCV crop: 裁剪区域过小";
+    return false;
+  }
+
+  bm_handle_t h = p_->handle;
+  bm_status_t st;
+
+  // 1) H2D: AVFrame NV12 -> 源 bm_image
+  void* host_planes[2] = {frame->data[0], frame->data[1]};
+  st = bm_image_copy_host_to_device(p_->src_img, host_planes);
+  if (st != BM_SUCCESS) { err = "BMCV crop: H2D 失败"; return false; }
+
+  // 2) 按需（重）创建 crop 输出 RGB_PACKED bm_image
+  if (p_->crop_rgb_valid && (p_->crop_w != crop_w || p_->crop_h != crop_h)) {
+    bm_image_destroy(p_->crop_rgb);
+    p_->crop_rgb_valid = false;
+  }
+  if (!p_->crop_rgb_valid) {
+    int stride[1] = {crop_w * 3};
+    st = bm_image_create(h, crop_h, crop_w, FORMAT_RGB_PACKED, DATA_TYPE_EXT_1N_BYTE,
+                         &p_->crop_rgb, stride);
+    if (st != BM_SUCCESS) { err = "BMCV crop: 创建输出失败"; return false; }
+    st = bm_image_alloc_dev_mem(p_->crop_rgb, BMCV_HEAP0_ID);
+    if (st != BM_SUCCESS) { bm_image_destroy(p_->crop_rgb); err = "BMCV crop: 分配设备内存失败"; return false; }
+    p_->crop_w = crop_w;
+    p_->crop_h = crop_h;
+    p_->crop_rgb_valid = true;
+  }
+
+  // 3) BMCV VPP: crop(src roi) + CSC NV12->RGB_PACKED 一步完成
+  //    crop_rect 指定源裁剪区域；输出 bm_image 尺寸 = crop_w x crop_h（无缩放）。
+  bmcv_rect_t crop_rect;
+  crop_rect.start_x = x;
+  crop_rect.start_y = y;
+  crop_rect.crop_w = crop_w;
+  crop_rect.crop_h = crop_h;
+  st = bmcv_image_vpp_convert(h, 1, p_->src_img, &p_->crop_rgb, &crop_rect,
+                              BMCV_INTER_LINEAR);
+  if (st != BM_SUCCESS) { err = "BMCV crop: VPP convert 失败"; return false; }
+
+  // 4) D2H: RGB_PACKED -> host Image
+  out.width = crop_w;
+  out.height = crop_h;
+  out.data.assign(static_cast<size_t>(crop_w) * crop_h * 3, 0);
+  void* crop_host[1] = {out.data.data()};
+  st = bm_image_copy_device_to_host(p_->crop_rgb, crop_host);
+  if (st != BM_SUCCESS) { err = "BMCV crop: D2H 失败"; return false; }
+  return out.valid();
 }
 
 bool BmcvProcessor::resize_yuv420p(AVFrame* frame, int output_width,

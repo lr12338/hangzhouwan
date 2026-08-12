@@ -224,6 +224,58 @@ int main() {
     }
   }
 
+  // === 测试 6：crop_to_rgb（抓拍裁剪路径，设备侧 crop+CSC）===
+  printf("== 测试 6: crop_to_rgb ==\n");
+  {
+    hzw::BmcvProcessor proc;
+    std::string err;
+    check(proc.init(handle, SW, SH, err), "init 成功");
+
+    SynthFrame sf(SW, SH);
+    // 设置可识别的亮度渐变
+    for (int y = 0; y < SH; ++y)
+      for (int x = 0; x < SW; ++x)
+        sf.y[y * SW + x] = static_cast<uint8_t>((x + y) % 256);
+
+    AVFrame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.data[0] = sf.y.data();
+    frame.data[1] = sf.uv.data();
+    frame.linesize[0] = SW;
+    frame.linesize[1] = SW;
+    frame.width = SW;
+    frame.height = SH;
+
+    // crop 中心 200x150 区域
+    const int CX = 300, CY = 200, CW = 200, CH = 150;
+    hzw::Image crop;
+    check(proc.crop_to_rgb(&frame, CX, CY, CW, CH, crop, err), "crop_to_rgb 成功");
+    check(crop.valid(), "crop Image 有效");
+    check(crop.width == CW, "crop 宽度正确");
+    check(crop.height == CH, "crop 高度正确");
+    check((int)crop.data.size() == CW * CH * 3, "crop 数据大小正确");
+    // 内容非空
+    bool has_content = false;
+    for (size_t i = 0; i < crop.data.size(); ++i) {
+      if (crop.data[i] != 0) { has_content = true; break; }
+    }
+    check(has_content, "crop 包含真实像素");
+
+    // 边界 clamp：crop 越界区域应自动收缩
+    hzw::Image crop2;
+    check(proc.crop_to_rgb(&frame, SW - 60, SH - 60, 100, 100, crop2, err),
+          "crop 越界自动 clamp 成功");
+    check(crop2.width <= 60 && crop2.height <= 60, "crop 越界后尺寸收缩");
+
+    // 重复 crop 不同尺寸（验证 crop_rgb 按需重建无泄漏）
+    for (int i = 0; i < 3; ++i) {
+      hzw::Image c;
+      int w = 50 + i * 30, h = 40 + i * 20;
+      check(proc.crop_to_rgb(&frame, 10, 10, w, h, c, err), "重复 crop 不同尺寸成功");
+    }
+  }
+  printf("  crop_to_rgb 测试完成\n");
+
   bm_dev_free(handle);
   printf("\n===== BMCV 测试: %d 失败 =====\n", failures);
   return failures > 0 ? 1 : 0;

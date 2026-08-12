@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include "inference/yolov7_postprocess.h"  // Detection
+#include "image_io/jpeg_io.h"               // Image
 #include "video/ffmpeg_compat.h"            // AVFrame
 
 namespace hzw {
@@ -68,6 +69,12 @@ class BmcvProcessor {
   // 矩形，最后随缩放结果统一回拷 host。检测/坐标仍保持原始分辨率；结构化详情由
   // JSONL/MQTT 保留。这样可避免在 2560x1440 上逐框渲染拖垮吞吐，同时
   // 避免手工构造的 DMA AVFrame 与 h264_bm 私有内存契约不匹配。
+  // 抓拍裁剪：从 AVFrame(NV12) 按 bbox(x,y,w,h) 在设备侧 crop + CSC 为 RGB_PACKED，
+  // 再 D2H 到 host Image。避免整帧 RGB D2H + CPU crop。坐标已 clamp 到图像边界。
+  // crop_w/crop_h 必须 >0。成功返回 true，out 为有效 RGB Image。
+  bool crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int crop_h,
+                   Image& out, std::string& err);
+
   bool resize_yuv420p(AVFrame* frame, int output_width, int output_height,
                       AVFrame** output, std::string& err,
                       const std::vector<ColoredRect>* overlays = nullptr);
