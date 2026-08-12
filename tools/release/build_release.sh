@@ -44,6 +44,10 @@ cp "$REPO_ROOT/build/dual_stream_app" "$RELEASE_DIR/bin/"
 if [ -f "$REPO_ROOT/build/forced_reconnect_tool" ]; then
   cp "$REPO_ROOT/build/forced_reconnect_tool" "$RELEASE_DIR/bin/"
 fi
+# AIS 驱动船舶抓拍服务（独立可执行：bmodel 共用，输出 JPEG 到 /data）
+if [ -f "$REPO_ROOT/build/bridge_capture_app" ]; then
+  cp "$REPO_ROOT/build/bridge_capture_app" "$RELEASE_DIR/bin/"
+fi
 # hzwctl 固定从 Release 自带 venv 启动，禁止使用 system/user-site Python。
 cp "$REPO_ROOT/tools/hzwctl.py" "$RELEASE_DIR/bin/hzwctl.py"
 cp "$REPO_ROOT/tools/release/hzwctl-wrapper.sh" "$RELEASE_DIR/bin/hzwctl"
@@ -72,6 +76,10 @@ cp "$REPO_ROOT"/deploy/systemd/*.service "$RELEASE_DIR/systemd/" 2>/dev/null || 
 cp "$REPO_ROOT"/deploy/systemd/*.timer "$RELEASE_DIR/systemd/" 2>/dev/null || true
 cp "$REPO_ROOT"/deploy/systemd/*.target "$RELEASE_DIR/systemd/" 2>/dev/null || true
 cp "$REPO_ROOT/config/application.example.yaml" "$RELEASE_DIR/config/"
+# bridge_capture_app 环境变量模板（真实 RTSP URL 走 /etc/hangzhouwan/bridge-capture.env）
+if [ -f "$REPO_ROOT/config/bridge-capture.env.example" ]; then
+  cp "$REPO_ROOT/config/bridge-capture.env.example" "$RELEASE_DIR/config/"
+fi
 # tmpfiles.d：共享运行目录 /run/hangzhouwan 由 tmpfiles.d 统一管理
 if [ -f "$REPO_ROOT/deploy/tmpfiles.d/hangzhouwan.conf" ]; then
   mkdir -p "$RELEASE_DIR/tmpfiles.d"

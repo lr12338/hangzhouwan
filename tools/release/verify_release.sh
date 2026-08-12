@@ -60,7 +60,7 @@ else
 fi
 
 # 5. 关键文件存在
-for f in bin/dual_stream_app models/yolov7_ship_1684_f32.bmodel config/application.example.yaml; do
+for f in bin/dual_stream_app bin/bridge_capture_app models/yolov7_ship_1684_f32.bmodel config/application.example.yaml config/bridge-capture.env.example systemd/hangzhouwan-bridge-capture.service; do
   if [ -f "$RELEASE_DIR/$f" ]; then
     echo "  ✅ $f"
     PASS=$((PASS + 1))
@@ -76,6 +76,13 @@ if [ -x "$RELEASE_DIR/bin/dual_stream_app" ]; then
   PASS=$((PASS + 1))
 else
   echo "  ❌ dual_stream_app 不可执行"
+  FAIL=$((FAIL + 1))
+fi
+if [ -x "$RELEASE_DIR/bin/bridge_capture_app" ]; then
+  echo "  ✅ bridge_capture_app 可执行"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ bridge_capture_app 不可执行"
   FAIL=$((FAIL + 1))
 fi
 

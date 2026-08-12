@@ -13,7 +13,7 @@ Group=hangzhouwan
 WorkingDirectory=/opt/hangzhouwan/current
 EnvironmentFile=/etc/hangzhouwan/bridge-capture.env
 ExecStart=/opt/hangzhouwan/current/bin/bridge_capture_app \
-  --bmodel /opt/hangzhouwan/current/weights/yolov7.bmodel \
+  --bmodel /opt/hangzhouwan/current/models/yolov7_ship_1684_f32.bmodel \
   --device 0 \
   --capture-dir /data/hangzhouwan/bridge/captures \
   --socket /run/hangzhouwan/bridge-capture.sock \
