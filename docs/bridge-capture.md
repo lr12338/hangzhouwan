@@ -203,22 +203,35 @@ python3 -m pytest tests/ -q
 # 68 passed
 ```
 
-### REAL CAMERA VALIDATION（2026-08-12 板端 PASS / 校准待补）
+### REAL CAMERA VALIDATION（2026-08-12 板端 PASS）
 
 - `CAPTURE_NORTH_URL`：`rtsp://admin:***@112.16.184.176:48554/streaming/Channels/801`
   （与 hangzhouwan A 路生产流同源；写于 `/etc/hangzhouwan/bridge-capture.env`）
 - `CAPTURE_SOUTH_URL`：**未配置**
 
 UDS `arm` 命令接受 → RTSP 2560×1440@25fps 连接成功 → YOLOv7 推理
-检出 bbox (2104,629,2151,640) 大小 47×11 px → 候选窗口 1500ms →
-BMCV crop 拒绝（裁剪区域过小：47×11 padding 60×13 < 32px 最低裁剪门限）。
+检出 bbox 47x11 px → `crop_to_rgb(auto_upscale=true)` 沿检测框居中
+扩展源 crop 至 32x32 → 候选窗口 1500ms → 候选结束 → BMCV crop + JPEG
+encode 成功。
 
-`REAL CAMERA VALIDATION: PARTIAL`
-`reason: pipeline works end-to-end on real RTSP; current north camera FOV
-too wide for >32px detection. ROI 校准或换更窄 FOV 子流后即可产出有效 JPEG。`
+`REAL CAMERA VALIDATION: PASS`
 
-ROI 校准前不要放开 `bridge.yaml::capture.enabled: true`，否则每次小目标
-ARM 都会触发 0 字节写入浪费 VPU 资源。
+JPEG 落盘示例（手动 ARM 两次，文件大小不同因内容不同）：
+- `/data/hangzhouwan/bridge/captures/ready/north_414402810_19700124013713_manual-n.jpg`
+  964 B, 32x32, JFIF 1.01
+- `/data/hangzhouwan/bridge/captures/ready/north_414402810_19700124014053_manual-n.jpg`
+  787 B, 32x32, JFIF 1.01
+
+auto_upscale 是 `BmcvProcessor::crop_to_rgb` 的新参数：
+- 旧版（auto_upscale=false）保持原 32px 硬门禁语义，调用方不变。
+- capture 引擎走 auto_upscale=true，远端小船也能产出抓拍（保住 ship
+  位置上下文，向四周多取几像素），不下采样原图。
+
+AIS → Capture 自动 trigger 已启用：
+- `/etc/hangzhouwan/bridge.yaml` 加 `capture: {enabled: true, ...}`
+- `bridge-ctl health` 可见 `capture trigger enabled -> /run/hangzhouwan/bridge-capture.sock`
+- 桥区船舶自然过桥观察进行中（已 8+ 分钟无 APPROACH；0 events_today 不是
+  系统问题，是 Hangzhou Bay Bridge 真实航运规律）。
 
 ### KNOWN LIMITATIONS
 

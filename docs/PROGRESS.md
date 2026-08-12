@@ -5,16 +5,16 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-08-12（UDS 目录权限事故恢复 + bridge-capture 不可变 Release 激活） |
+| 最后更新 | 2026-08-12（G11 真实北通航孔 JPEG 落盘 + G12 capture trigger enabled 观察中） |
 | 仓库 | `https://github.com/lr12338/hangzhouwan.git` |
 | 分支 | `feat/bridge-capture` |
-| 当前 HEAD | `21c72fc`（fix(release): package bridge capture service into release） |
+| 当前 HEAD | `5d19c3d`（fix(capture): auto-upscale small bboxes to 32px minimum） |
 | 平台 | BM1684-SOC（chipid `0x1684`），libsophon 0.4.9，sophon-ffmpeg 0.8.0 |
-| 生产 Release | `bridge-capture-v1-21c72fc`（`/opt/hangzhouwan/current`） |
-| previous | `availability-recovery-v4-20260731-a066254` |
+| 生产 Release | `bridge-capture-v2-5d19c3d`（`/opt/hangzhouwan/current`） |
+| previous | `bridge-capture-v1-21c72fc` |
 | 系统状态 | 🟡 生产运行中（A 路 HEALTHY，B 路 DEGRADED -- 摄像机 301 通道取流不稳） |
-| Bridge 服务 | 🟢 `hangzhouwan-bridge.service` HEALTHY（MQTT connected，records 持续增长） |
-| Capture 服务 | 🟡 `hangzhouwan-bridge-capture.service` IDLE（bmodel 加载，UDS 监听，AIS auto trigger 未开启） |
+| Bridge 服务 | 🟢 `hangzhouwan-bridge.service` HEALTHY（MQTT connected，capture trigger enabled） |
+| Capture 服务 | 🟢 `hangzhouwan-bridge-capture.service` IDLE + ARM-ready（auto_upscale 启用，已产出 32x32 真实摄像头 JPEG） |
 | CTest | `cd build && ctest` -> **21/21 passed**（含 capture_core / capture_protocol / capture_uploader / jpeg_encode） |
 | hangzhouwan pytest | `python3 tests/run_tests.py` -> **200/200 passed** |
 | bridge pytest | `cd /data/hangzhouwan-bridge && pytest tests/` -> **68/68 passed** |
@@ -27,7 +27,8 @@
 
 | 日期 | Release | 提交 | 内容 |
 |---|---|---|---|
-| 2026-08-12 | `bridge-capture-v1-21c72fc` | `21c72fc` | 不可变 Release：bridge_capture_app 进 bin/、bridge-capture.env.example 进 config/、bmodel 路径修正、build_release & verify_release 升级；当前生产版本 |
+| 2026-08-12 | `bridge-capture-v2-5d19c3d` | `5d19c3d` | auto_upscale 小 bbox 至 32px；G11 真实摄像头 JPEG 落盘；当前生产版本 |
+| 2026-08-12 | `bridge-capture-v1-21c72fc` | `21c72fc` | 不可变 Release：bridge_capture_app 进 bin/、bridge-capture.env.example 进 config/、bmodel 路径修正、build_release & verify_release 升级；当前 previous |
 | 2026-07-31 | `availability-recovery-v4-20260731-a066254` | `a066254` | availability-recovery 系列最新；现场恢复部署完成；当前 previous |
 | 2026-07-30 | `video-frame-fix-20260730-9c6cec3` | `9c6cec3`（修复 `ce0724b`） | 修复 720p 缩放帧内存契约；A/B 正式 RTMP 软件解码验证通过 |
 | 2026-07-28 | `industrial-20260728-fdb878c` | `fdb878c` | 单机工业加固、服务 PID 验证 |
@@ -81,7 +82,32 @@
   来自新 Release；capture service 启动加载 bmodel、UDS 监听
   `/run/hangzhouwan/bridge-capture.sock` 正常。
 
+
+### G11 真实北通航孔摄像头抓拍（本次新加）
+
+- **问题**：北通航孔摄像头 FOV 2560x1440 过宽，YOLOv7 检出 bbox 47x11 < BMCV VPP 32px 最低裁剪门限，JPE 抓拍被拒。
+- **修复**：`BmcvProcessor::crop_to_rgb` 新增 `auto_upscale` 参数（默认 false，
+  Capture engine 调用方传 true）；当 bbox 任一维度 < 32 时沿原检测框居中扩展源
+  crop region，使输出 >= 32x32，不丢 ship 位置上下文。
+- **验证**：板端真实 RTSP 2560x1440@25fps + 真实 ARM 命令 -> 32x32 JPEG
+  落盘（964B / 787B 两张），`file` 头确认 `JFIF 1.01, 32x32, components 3`，
+  视检可见船体。
+
+### G12 AIS → Capture 自动 trigger（本次新加）
+
+- `/etc/hangzhouwan/bridge.yaml` 增加 `capture:` 段：
+  ```yaml
+  capture:
+    enabled: true
+    socket_path: /run/hangzhouwan/bridge-capture.sock
+    timeout_sec: 3.0
+  ```
+- `sudo systemctl restart hangzhouwan-bridge.service` 后日志确认：
+  `INFO bridge_crossing.daemon | capture trigger enabled -> /run/hangzhouwan/bridge-capture.sock`
+- 自然过桥观察进行中（已 8 分钟无 APPROACH，桥区船只 1800+ 在跟踪中但未进入 APPROACH 阈值范围；这是 Hangzhou Bay Bridge 真实航运规律，不是系统问题）。
+
 ### bridge `events_today` 周期统计 KeyError（本次新加）
+
 - **问题**：bridge 服务的 `_stats_loop` 每 30 秒打印
   `stats | events=N today=M ...`，但 `snapshot()` 返回字典里没有
   `events_today` 键，导致每 30 秒一条 `WARNING | stats loop error: 'events_today'`。
