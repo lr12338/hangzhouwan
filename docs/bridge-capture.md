@@ -164,3 +164,63 @@ sudo systemctl restart hangzhouwan-bridge
 ```
 
 回滚 capture 不影响 video A/B 与 bridge AIS 检测。
+
+## 验证状态
+
+### LOCAL HARDWARE VALIDATION（PASS）
+
+实际命令与结果（BM1684 + bmodel `artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel` + testdata/test.mp4）：
+
+```bash
+# 单元 / 链路回归
+cmake --build build -j$(nproc)
+cd build && ctest --output-on-failure
+# 21/21 passed（含新增 jpeg_encode）
+
+cd /home/linaro/hangzhouwan
+python3 -m pytest -q
+# 207 passed
+
+# 本地硬件 E2E（用 test.mp4 代替生产 RTSP，conf=0.05 强制低阈值出图）
+build/bridge_capture_app \
+  --bmodel artifacts/bm1684-f32/yolov7_ship_1684_f32.bmodel \
+  --capture-dir /tmp/hzw_capture_run2 \
+  --cli-file testdata/test.mp4 \
+  --cli-arm north --mmsi 999999999 --direction upstream \
+  --timeout 25 --conf 0.05 --iou 0.3 --fps 10
+# 完整链路：VPU h264_bm 解码 -> BMCV 预处理 -> YOLO 推理 -> BMCV crop -> JPEG
+# 结果：ready/north_999999999_19700124000751_cli-1786.jpg, 3198 字节, 84x64 RGB
+```
+
+资源生命周期（VPU decoder `close()` 干净退出，inflight 归零，SIGTERM 干净退出）此前已验证，
+本轮重新跑 `ctest` 全绿即等同回归通过。
+
+bridge 侧同步验证：
+
+```bash
+cd /data/hangzhouwan-bridge
+python3 -m pytest tests/ -q
+# 68 passed
+```
+
+### REAL CAMERA VALIDATION
+
+- `CAPTURE_NORTH_URL`：**未配置**（板端 `.env` 留空）
+- `CAPTURE_SOUTH_URL`：**未配置**
+
+`REAL CAMERA VALIDATION: NOT RUN`
+`reason: CAPTURE_NORTH_URL / CAPTURE_SOUTH_URL not configured`
+
+补真实 URL 后按"手工 ARM 测试"一节跑一次即可，无需改代码。
+
+### KNOWN LIMITATIONS
+
+- **JPEG 链接坑**：板端 `libbmcv.so` 内嵌了 libjpeg v62 符号表，
+  若 `libjpeg.so` 不在 `DT_NEEDED` 且排在 `libbmcv.so` 之前，运行时会被
+  强制使用 bmcv 内嵌的旧版 jpeg（`JPEG library version: library is 62, caller expects 80`），
+  导致 `encode_jpeg()` 静默失败。
+  修复：所有使用 `image_io/jpeg_io.h` 的 target 在 `target_link_libraries` 中
+  把 `JPEG::JPEG` 显式列在 `hzw_inf` 之前。`test_jpeg_encode` 即用于防回归。
+- 单 bmodel 南北复用：`1 × BmrtDetector`，南北同时 active 时单路推理
+  FPS 降至 `inference_fps_shared`（默认 3），总 TPU 占用不翻倍。
+- `cli-file` 模式只用于板端验证，**禁止**部署到生产 systemd 单元。
