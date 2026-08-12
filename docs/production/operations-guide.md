@@ -3,6 +3,41 @@
 > 本文档为 BM1684 板端生产部署的主要操作参考，可直接复制执行。
 > 适用版本：2026-07 单机工业生产加固 Release。
 > **当前状态：已替代 Windows 旧服务，双路推流正式地址，生产运行中。**
+> 2026-08-12 当前 Release：`bridge-capture-v1-21c72fc`（含 bridge_capture_app + bridge-capture.env.example；见 `../PROGRESS.md`）。
+> 2026-08-12 现场 UDS 目录权限事故恢复：见第 19.4 节。
+
+---
+
+## 0. 运维速查（一屏命令）
+
+复制即用，覆盖全系统状态、原视频、AIS Bridge、抓拍、Socket、图片、磁盘：
+
+```bash
+# 全系统
+/opt/hangzhouwan/current/bin/hzwctl status
+
+# 原视频
+systemctl status hangzhouwan-business
+systemctl status hangzhouwan-video
+
+# AIS Bridge
+/opt/hangzhouwan-bridge/current/bin/bridge-ctl health
+/opt/hangzhouwan-bridge/current/bin/bridge-ctl stats
+/opt/hangzhouwan-bridge/current/bin/bridge-ctl events -n 20
+
+# 抓拍
+systemctl status hangzhouwan-bridge-capture
+journalctl -u hangzhouwan-bridge-capture -n 100
+
+# Socket
+ls -l /run/hangzhouwan/
+
+# 图片
+find /data/hangzhouwan/bridge/captures/ready -maxdepth 1 -type f -name '*.jpg' -ls
+
+# 磁盘
+df -h / /data
+```
 
 ---
 
@@ -846,3 +881,35 @@ sudo journalctl --vacuum-size=50M
 | Docker | 无容器运行 | 磁盘 230M + 内存 37M |
 | Cursor Server | 远程开发工具，非生产 | 磁盘 200M + 内存 670M |
 | BSP 安装包 | 安装后无用 | 磁盘 273M |
+
+---
+
+## 19.4 2026-08-12 UDS 目录权限事故恢复
+
+详见 `/data/hangzhouwan/incidents/incident-20260812-1712-snapshot.md` 和 `../PROGRESS.md` 关键修复记录章节。简述：
+
+### 现象
+`hzwctl preflight --release ... --offline --activation` 报：
+`❌ UDS 目录可写 / ❌ 目录 /run/hangzhouwan (必须预先创建且当前服务身份可写)`
+Video service 退出 78 (CONFIG) → backoff；A 路处理被视频管线拉挂。
+
+### 现场恢复
+```bash
+sudo systemctl reset-failed hangzhouwan-video.service
+sudo chown root:hangzhouwan /run/hangzhouwan
+sudo chmod 0770 /run/hangzhouwan
+sudo systemctl restart hangzhouwan-video.service
+```
+
+### 根因
+`/etc/systemd/system/hangzhouwan-bridge.service` 含 `RuntimeDirectory=hangzhouwan` +
+`RuntimeDirectoryMode=0750`，每次 bridge 重启把 `/run/hangzhouwan` 重建为
+`hangzhouwan-business:hangzhouwan 0750`，覆盖 tmpfiles.d 的 `root:hangzhouwan 0770` 规范。
+group 在 0750 下只有 r-x，video 用户无法在 `/run/hangzhouwan` 写 `video-health.sock`。
+
+### 持久修复
+从 `hangzhouwan-bridge.service` 移除 `RuntimeDirectory=hangzhouwan` + `RuntimeDirectoryMode=0750`，
+由 `/etc/tmpfiles.d/hangzhouwan.conf` 单一所有者管理。bridge 启停不再误改 `/run/hangzhouwan`。
+
+### 门禁补强
+`verify_release.sh` 在关键文件列表加 `bin/bridge_capture_app` / `config/bridge-capture.env.example` / `systemd/hangzhouwan-bridge-capture.service`。
