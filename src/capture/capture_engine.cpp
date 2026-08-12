@@ -9,6 +9,7 @@
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <vector>
 
 #include "capture/capture_core.h"
@@ -20,6 +21,14 @@
 namespace hzw {
 
 namespace {
+bool disk_has_space(const std::string& path, int min_mb) {
+  if (min_mb <= 0) return true;
+  struct statvfs st;
+  if (statvfs(path.c_str(), &st) != 0) return true;  // 查询失败不阻塞
+  unsigned long long free_bytes = (unsigned long long)st.f_bavail * st.f_frsize;
+  return free_bytes >= (unsigned long long)min_mb * 1024ULL * 1024ULL;
+}
+
 void ensure_capture_dirs(const std::string& base) {
   for (const char* sub : {"pending", "ready", "failed", "diagnostics"}) {
     std::string p = base + "/" + sub;
@@ -73,6 +82,10 @@ std::string CaptureEngine::handle_arm(const CaptureArmRequest& req) {
   if (resource_fatal_.load()) {
     return make_arm_response(false, req.session_id, "RESOURCE_FATAL",
                              "device resource fatal");
+  }
+  if (!disk_has_space(cfg_.capture_dir, cfg_.disk_free_threshold_mb)) {
+    return make_arm_response(false, req.session_id, "FAILED",
+                             "disk free below threshold");
   }
   const BridgeCaptureConfig* bc = bridge_cfg(req.bridge);
   if (!bc) {

@@ -50,6 +50,7 @@ struct CaptureEngineConfig {
   BridgeCaptureConfig north;
   BridgeCaptureConfig south;
   std::string socket_path = "/run/hangzhouwan/bridge-capture.sock";
+  int disk_free_threshold_mb = 500;  // 可用磁盘低于此值时拒绝新抓拍（保护生产）
 };
 
 class CaptureEngine {

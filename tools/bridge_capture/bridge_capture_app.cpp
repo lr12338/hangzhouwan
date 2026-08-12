@@ -14,6 +14,7 @@
 //   bridge_capture_app --cli-arm north --mmsi 414402810 --direction upstream \
 //     --bmodel ... --north-url-env CAPTURE_NORTH_URL
 // =============================================================================
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -32,11 +33,13 @@
 namespace {
 
 hzw::CaptureEngine* g_engine = nullptr;
+std::atomic<bool> g_stop{false};
 
 void on_signal(int sig) {
   std::fprintf(stdout, "\n信息 | 信号 %d，停止 capture\n", sig);
   std::fflush(stdout);
   if (g_engine) g_engine->stop();
+  g_stop.store(true);
 }
 
 std::string get_env(const char* name) {
@@ -200,10 +203,13 @@ int main(int argc, char** argv) {
   }
   ::chmod(socket_path.c_str(), 0660);
   ::listen(srv, 8);
+  // 设置 accept 超时，使循环能周期性检查 g_stop
+  struct timeval tv; tv.tv_sec = 1; tv.tv_usec = 0;
+  ::setsockopt(srv, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   std::fprintf(stdout, "信息 | capture | UDS server 监听 %s\n", socket_path.c_str());
   std::fflush(stdout);
 
-  while (true) {
+  while (!g_stop.load()) {
     if (engine.resource_fatal()) {
       std::fprintf(stderr, "错误 | 资源致命，退出\n");
       uploader.stop();
@@ -214,7 +220,7 @@ int main(int argc, char** argv) {
     }
     int conn = ::accept(srv, nullptr, nullptr);
     if (conn < 0) {
-      if (errno == EINTR) continue;
+      // 超时或中断 -> 继续循环检查 g_stop
       continue;
     }
     // 读一帧（4B 长度 + payload）

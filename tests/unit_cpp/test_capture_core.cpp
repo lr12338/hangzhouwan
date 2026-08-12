@@ -6,6 +6,7 @@
 #include <string>
 
 #include "capture/capture_core.h"
+#include "capture/capture_engine.h"
 
 static int failures = 0;
 #define CHECK(cond) do { if(!(cond)){ std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #cond); ++failures; } } while(0)
@@ -84,6 +85,11 @@ int main() {
   test_pad_and_clamp();
   test_score_candidate();
   test_filename();
+  {
+    hzw::CaptureEngineConfig cfg;
+    CHECK(cfg.disk_free_threshold_mb == 500);
+    CHECK(cfg.disk_free_threshold_mb > 0);
+  }
   if (failures == 0) { std::printf("capture_core: all passed\n"); return 0; }
   std::printf("capture_core: %d failures\n", failures);
   return 1;
