@@ -27,6 +27,7 @@
 
 #include "capture/capture_engine.h"
 #include "capture/capture_protocol.h"
+#include "capture/capture_uploader.h"
 
 namespace {
 
@@ -71,6 +72,10 @@ void print_usage() {
       "  --mmsi MMSI             手工 ARM 时的 MMSI\n"
       "  --direction DIR         upstream|downstream\n"
       "  --timeout SEC           会话超时（默认 180）\n"
+      "  --upload                启用 HTTP 上传（默认关闭，P6）\n"
+      "  --upload-host HOST      上传主机（默认 127.0.0.1）\n"
+      "  --upload-port PORT      上传端口（默认 8080）\n"
+      "  --upload-path PATH      上传路径（默认 /api/captures）\n"
       "  --help                  显示帮助\n");
 }
 
@@ -81,6 +86,10 @@ int main(int argc, char** argv) {
   std::string socket_path = "/run/hangzhouwan/bridge-capture.sock";
   std::string north_env, south_env, cli_arm, mmsi, direction = "upstream";
   int device = 0, fps = 5, timeout_sec = 180;
+  bool upload_enabled = false;
+  std::string upload_host = "127.0.0.1";
+  int upload_port = 8080;
+  std::string upload_path = "/api/captures";
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -101,6 +110,10 @@ int main(int argc, char** argv) {
     else if (a == "--mmsi") mmsi = next("--mmsi");
     else if (a == "--direction") direction = next("--direction");
     else if (a == "--timeout") timeout_sec = std::atoi(next("--timeout").c_str());
+    else if (a == "--upload") { upload_enabled = true; }
+    else if (a == "--upload-host") upload_host = next("--upload-host");
+    else if (a == "--upload-port") upload_port = std::atoi(next("--upload-port").c_str());
+    else if (a == "--upload-path") upload_path = next("--upload-path");
     else { std::fprintf(stderr, "未知参数: %s\n", a.c_str()); print_usage(); return 2; }
   }
 
@@ -125,6 +138,22 @@ int main(int argc, char** argv) {
   if (!engine.init(cfg, err)) {
     std::fprintf(stderr, "错误 | capture 初始化失败: %s\n", err.c_str());
     return 70;  // kPipelineExitHardware
+  }
+
+  // HTTP 上传器（可选，P6；独立线程轮询 ready/ 目录）
+  hzw::CaptureUploader uploader;
+  if (upload_enabled) {
+    hzw::UploaderConfig uc;
+    uc.enabled = true;
+    uc.ready_dir = capture_dir + "/ready";
+    uc.failed_dir = capture_dir + "/failed";
+    uc.diagnostics_dir = capture_dir + "/diagnostics";
+    uc.http_host = upload_host;
+    uc.http_port = upload_port;
+    uc.http_path = upload_path;
+    uploader.start(uc);
+    std::fprintf(stdout, "信息 | capture | HTTP 上传已启用 -> %s:%d%s\n",
+                 upload_host.c_str(), upload_port, upload_path.c_str());
   }
 
   // 手工 ARM CLI 模式（P2 板端验证）：直接 arm，同步等待结果。
@@ -177,6 +206,8 @@ int main(int argc, char** argv) {
   while (true) {
     if (engine.resource_fatal()) {
       std::fprintf(stderr, "错误 | 资源致命，退出\n");
+      uploader.stop();
+      engine.stop();
       ::close(srv);
       ::unlink(socket_path.c_str());
       return 70;
@@ -237,5 +268,10 @@ int main(int argc, char** argv) {
     if (!frame.empty()) ::write(conn, frame.data(), frame.size());
     ::close(conn);
   }
+  // 不会到达（UDS 循环由信号/engine.stop 终止）；保留清理以防空循环退出。
+  uploader.stop();
+  engine.stop();
+  ::close(srv);
+  ::unlink(socket_path.c_str());
   return 0;
 }

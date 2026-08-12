@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <sys/stat.h>
 #include <vector>
 
 #include "capture/capture_core.h"
@@ -19,6 +20,14 @@
 namespace hzw {
 
 namespace {
+void ensure_capture_dirs(const std::string& base) {
+  for (const char* sub : {"pending", "ready", "failed", "diagnostics"}) {
+    std::string p = base + "/" + sub;
+    // 递归创建（base 可能不存在）
+    std::string cmd = "mkdir -p " + p;
+    std::system(cmd.c_str());
+  }
+}
 int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -41,6 +50,8 @@ bool CaptureEngine::init(const CaptureEngineConfig& cfg, std::string& err) {
     return false;
   }
   // BmcvProcessor 延迟到首个会话按实际分辨率 init（分辨率随摄像头不同）。
+  // 创建抓拍文件结构（pending/ready/failed/diagnostics，见 goal-objective 十七）
+  ensure_capture_dirs(cfg.capture_dir);
   start_ms_.store(wall_ms());
   north_ = std::make_unique<Session>();
   south_ = std::make_unique<Session>();

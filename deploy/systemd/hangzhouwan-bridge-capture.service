@@ -1,0 +1,67 @@
+[Unit]
+Description=Hangzhou Bay Bridge Capture Service (AIS-driven ship snapshot)
+Wants=hangzhouwan-bridge.service network-online.target
+After=hangzhouwan-bridge.service network-online.target
+PartOf=hangzhouwan.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=hangzhouwan-video
+Group=hangzhouwan
+WorkingDirectory=/opt/hangzhouwan/current
+EnvironmentFile=/etc/hangzhouwan/bridge-capture.env
+ExecStart=/opt/hangzhouwan/current/bin/bridge_capture_app \
+  --bmodel /opt/hangzhouwan/current/weights/yolov7.bmodel \
+  --device 0 \
+  --capture-dir /data/hangzhouwan/bridge/captures \
+  --socket /run/hangzhouwan/bridge-capture.sock \
+  --north-url-env CAPTURE_NORTH_URL \
+  --south-url-env CAPTURE_SOUTH_URL \
+  --fps 5
+Restart=on-failure
+RestartPreventExitStatus=70 78
+RestartSec=60
+LimitNOFILE=4096
+LimitCORE=0
+KillSignal=SIGTERM
+TimeoutStartSec=30
+TimeoutStopSec=45
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+# BM1684 VPU/TPU 设备访问（与 video service 共享同一设备）。
+PrivateDevices=false
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+DevicePolicy=closed
+DeviceAllow=/dev/bm-tpu0 rw
+DeviceAllow=/dev/bm-vpp rw
+DeviceAllow=/dev/bmdev-ctl rw
+DeviceAllow=/dev/ion rw
+DeviceAllow=/dev/jpu rw
+DeviceAllow=/dev/vpu rw
+ReadWritePaths=/run/hangzhouwan /data/hangzhouwan/bridge/captures
+TasksMax=128
+# OOM 优先级低于生产 video（video=-500，capture=200：内存压力时优先杀 capture）。
+# 抓拍失败可接受，生产 A/B 被拖挂不可接受。
+MemoryHigh=384M
+MemoryMax=512M
+OOMScoreAdjust=200
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+SyslogIdentifier=hangzhouwan-bridge-capture
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=hangzhouwan.target

@@ -172,7 +172,8 @@ add_test(NAME async_jsonl_writer COMMAND test_async_jsonl_writer)
 add_library(hzw_capture STATIC
   src/capture/capture_core.cpp
   src/capture/capture_protocol.cpp
-  src/capture/capture_engine.cpp)
+  src/capture/capture_engine.cpp
+  src/capture/capture_uploader.cpp)
 target_include_directories(hzw_capture PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
 target_link_libraries(hzw_capture PUBLIC hzw_inf)
 
@@ -188,6 +189,10 @@ add_test(NAME capture_core COMMAND test_capture_core)
 add_executable(test_capture_protocol tests/unit_cpp/test_capture_protocol.cpp)
 target_link_libraries(test_capture_protocol PRIVATE hzw_capture)
 add_test(NAME capture_protocol COMMAND test_capture_protocol)
+
+add_executable(test_capture_uploader tests/unit_cpp/test_capture_uploader.cpp)
+target_link_libraries(test_capture_uploader PRIVATE hzw_capture)
+add_test(NAME capture_uploader COMMAND test_capture_uploader)
 
 # 板端 forced-reconnect / VPU 显存泄漏复现工具（需 BM1684 硬件，不纳入 CTest 自动跑）
 add_executable(forced_reconnect_tool tools/dual_stream/forced_reconnect_tool.cpp)
