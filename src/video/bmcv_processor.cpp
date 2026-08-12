@@ -215,6 +215,11 @@ bool BmcvProcessor::crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int cr
   if (y < 0) y = 0;
   if (x + crop_w > p_->src_w) crop_w = p_->src_w - x;
   if (y + crop_h > p_->src_h) crop_h = p_->src_h - y;
+  // NV12 色度 2x 下采样：crop 起点/尺寸必须偶数对齐，否则 VPP 报错。
+  x = x & ~1;
+  y = y & ~1;
+  crop_w = crop_w & ~1;
+  crop_h = crop_h & ~1;
   if (crop_w <= 0 || crop_h <= 0) { err = "BMCV crop: 裁剪区域越界"; return false; }
   if (crop_w < kMinCropDim || crop_h < kMinCropDim) {
     err = "BMCV crop: 裁剪区域过小";

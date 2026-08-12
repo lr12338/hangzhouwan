@@ -148,6 +148,18 @@ void CaptureEngine::stop() {
 
 bool CaptureEngine::open_source(SophonVideoSource& src, const BridgeCaptureConfig& bc,
                                 std::string& err) {
+  // 测试用本地文件优先（板端验证，不连生产流）
+  if (!bc.test_file.empty()) {
+    src.set_loop(1);
+    if (!src.open(bc.test_file, cfg_.device, bc.extra_frame_buffer_num, "h264_bm", err)) {
+      if (src.resource_fatal()) resource_fatal_.store(true);
+      return false;
+    }
+    std::fprintf(stdout, "信息 | capture | 文件 %s 打开 %dx%d\n",
+                 bc.test_file.c_str(), src.width(), src.height());
+    std::fflush(stdout);
+    return true;
+  }
   const char* env_val = std::getenv(bc.url_env.c_str());
   if (!env_val || !env_val[0]) {
     err = "环境变量 " + bc.url_env + " 未设置";
@@ -267,12 +279,19 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
       input.assign(static_cast<size_t>(detector_->input_element_count()), 0.0f);
       pre_ok = bmcv.preprocess(vf.frame, input.data(), berr);
     }
-    if (!pre_ok) { vf.release(); continue; }
+    if (!pre_ok) { if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | preprocess FAIL: %s\n", berr.c_str()); vf.release(); continue; }
 
     if (!detector_->infer(input, output)) { vf.release(); continue; }
     dets.clear();
     postprocess_yolov7(output.data(), num_boxes, num_vals, src.width(), src.height(),
                        input_size, bc->conf, bc->iou, dets);
+    if (getenv("HZW_CAPTURE_DEBUG")) {
+      std::fprintf(stderr, "DBG | infer seq=%lld dets=%zu pre_ok=%d bmcv_ready=%d conf=%.3f\n",
+                   (long long)vf.sequence, dets.size(), (int)pre_ok, (int)bmcv_ready, bc->conf);
+      for (size_t di = 0; di < dets.size() && di < 3; ++di)
+        std::fprintf(stderr, "DBG |   det[%zu] score=%.3f box=(%.0f,%.0f,%.0f,%.0f)\n",
+                     di, dets[di].score, dets[di].x1, dets[di].y1, dets[di].x2, dets[di].y2);
+    }
 
     // 选最佳目标：valid_roi 内 + 非禁区 + 面积最大
     Detection* best_det = nullptr;
@@ -293,6 +312,7 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
       float cy = (best_det->y1 + best_det->y2) * 0.5f;
       float nx = cx / src.width();
       float ny = cy / src.height();
+      if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | best_det nx=%.3f ny=%.3f in_cap=%d win=%d\n", nx, ny, (int)bc->roi.point_in_capture(nx,ny), (int)in_candidate_window);
       // 进入 capture_roi -> 开始候选窗口
       if (bc->roi.point_in_capture(nx, ny)) {
         if (!in_candidate_window) {
@@ -313,12 +333,16 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
         has_prev = true;
         prev_cx = cx; prev_cy = cy;
 
+        if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | cand elapsed=%ldms window=%dms best=%.3f\n", (long)(wall_ms()-candidate_start_ms), bc->candidate_window_ms, best.score);
         // 候选窗口结束 -> 选最佳帧抓拍
         if (wall_ms() - candidate_start_ms >= bc->candidate_window_ms) {
           // CAPTURED：crop 原始帧 + JPEG
           s.state.store(CaptureState::CAPTURED);
           PaddedBox pb = pad_and_clamp_box(best.bx1, best.by1, best.bx2, best.by2,
                                            bc->bbox_padding, src.width(), src.height());
+          if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | CAPTURE box=(%.0f,%.0f,%.0f,%.0f) padded=(%.0f,%.0f,%.0f,%.0f) crop=%dx%d\n",
+                   best.bx1, best.by1, best.bx2, best.by2, pb.x1, pb.y1, pb.x2, pb.y2,
+                   (int)(pb.x2-pb.x1+1), (int)(pb.y2-pb.y1+1));
           // BMCV crop NV12 -> RGB（设备侧完成 crop+CSC）
           Image rgb_crop;
           bool crop_ok = false;
@@ -327,6 +351,7 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
                                        static_cast<int>(pb.x2 - pb.x1 + 1),
                                        static_cast<int>(pb.y2 - pb.y1 + 1), rgb_crop, berr);
           }
+          if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | crop_ok=%d valid=%d err=%s w=%d h=%d\n", (int)crop_ok, (int)rgb_crop.valid(), berr.c_str(), rgb_crop.width, rgb_crop.height);
           vf.release();  // 立即释放 VPU 帧
           if (crop_ok && rgb_crop.valid()) {
             // 原子写：先 .tmp 再 rename
@@ -336,7 +361,10 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
             // 确保 ready 存在（daemon/部署负责；此处兜底）
             std::string tmp = pending_dir + "/." + fname + ".tmp";
             std::string final = ready_dir + "/" + fname;
-            if (encode_jpeg(tmp, rgb_crop, bc->jpeg_quality)) {
+            if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | JPEG encode tmp=%s final=%s q=%d img=%dx%d\n", tmp.c_str(), final.c_str(), bc->jpeg_quality, rgb_crop.width, rgb_crop.height);
+            bool enc_ok = encode_jpeg(tmp, rgb_crop, bc->jpeg_quality);
+            if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | encode_jpeg=%d\n", (int)enc_ok);
+            if (enc_ok) {
               if (std::rename(tmp.c_str(), final.c_str()) == 0) {
                 s.last_jpeg_path = final;
                 captured_total_.fetch_add(1);

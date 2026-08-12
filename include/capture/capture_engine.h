@@ -30,6 +30,7 @@ namespace hzw {
 struct BridgeCaptureConfig {
   std::string bridge;        // "north" | "south"
   std::string url_env;       // RTSP URL 环境变量名（真实 URL 不入命令行/日志）
+  std::string test_file;     // 测试用本地文件路径（非空时优先于 RTSP，板端验证用）
   CaptureRoi roi;
   int inference_fps = 5;          // 单路 active
   int inference_fps_shared = 3;   // 南北同时 active 时

@@ -76,7 +76,7 @@ target_link_libraries(hzw_inf PUBLIC bmrt_runtime sophon_ffmpeg JPEG::JPEG Threa
 
 # 单图推理 PoC
 add_executable(single_image_infer tools/image_inference/single_image_infer.cpp)
-target_link_libraries(single_image_infer PRIVATE hzw_inf)
+target_link_libraries(single_image_infer PRIVATE JPEG::JPEG hzw_inf)
 
 # 阶段4 单路视频硬件推理
 add_executable(single_video_infer tools/video_inference/single_video_infer.cpp)
@@ -168,6 +168,11 @@ add_executable(test_async_jsonl_writer tests/unit_cpp/test_async_jsonl_writer.cp
 target_link_libraries(test_async_jsonl_writer PRIVATE hzw_inf)
 add_test(NAME async_jsonl_writer COMMAND test_async_jsonl_writer)
 
+# JPEG 编码 / 解码纯逻辑回归测试（保护 encode_jpeg 链路，防止 link 改动静默失效）
+add_executable(test_jpeg_encode tests/unit_cpp/test_jpeg_encode.cpp)
+target_link_libraries(test_jpeg_encode PRIVATE JPEG::JPEG hzw_inf)
+add_test(NAME jpeg_encode COMMAND test_jpeg_encode)
+
 # ===== Bridge Capture（AIS 驱动船舶抓拍，独立 executable，复用 hzw_inf）=====
 add_library(hzw_capture STATIC
   src/capture/capture_core.cpp
@@ -175,23 +180,23 @@ add_library(hzw_capture STATIC
   src/capture/capture_engine.cpp
   src/capture/capture_uploader.cpp)
 target_include_directories(hzw_capture PUBLIC include ${LIBSOPHON_INCLUDE} ${SOPHON_FFMPEG_INCLUDE})
-target_link_libraries(hzw_capture PUBLIC hzw_inf)
+target_link_libraries(hzw_capture PUBLIC hzw_inf JPEG::JPEG)
 
 # bridge_capture_app：独立抓拍服务
 add_executable(bridge_capture_app tools/bridge_capture/bridge_capture_app.cpp)
-target_link_libraries(bridge_capture_app PRIVATE hzw_capture)
+target_link_libraries(bridge_capture_app PRIVATE hzw_capture JPEG::JPEG)
 
 # ---- Bridge Capture 纯逻辑单元测试（无硬件依赖）----
 add_executable(test_capture_core tests/unit_cpp/test_capture_core.cpp)
-target_link_libraries(test_capture_core PRIVATE hzw_capture)
+target_link_libraries(test_capture_core PRIVATE hzw_capture JPEG::JPEG)
 add_test(NAME capture_core COMMAND test_capture_core)
 
 add_executable(test_capture_protocol tests/unit_cpp/test_capture_protocol.cpp)
-target_link_libraries(test_capture_protocol PRIVATE hzw_capture)
+target_link_libraries(test_capture_protocol PRIVATE hzw_capture JPEG::JPEG)
 add_test(NAME capture_protocol COMMAND test_capture_protocol)
 
 add_executable(test_capture_uploader tests/unit_cpp/test_capture_uploader.cpp)
-target_link_libraries(test_capture_uploader PRIVATE hzw_capture)
+target_link_libraries(test_capture_uploader PRIVATE hzw_capture JPEG::JPEG)
 add_test(NAME capture_uploader COMMAND test_capture_uploader)
 
 # 板端 forced-reconnect / VPU 显存泄漏复现工具（需 BM1684 硬件，不纳入 CTest 自动跑）

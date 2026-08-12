@@ -70,8 +70,8 @@ void print_usage() {
       "  --socket PATH           UDS 路径（默认 /run/hangzhouwan/bridge-capture.sock）\n"
       "  --north-url-env NAME    北通航孔 RTSP URL 环境变量名\n"
       "  --south-url-env NAME    南通航孔 RTSP URL 环境变量名\n"
-      "  --fps N                 单路推理 FPS（默认 5）\n"
-      "  --cli-arm BRIDGE        手工 ARM 测试（north/south），不走 UDS\n"
+      "  --fps N                 单路推理 FPS（默认 5）\n  --conf F                YOLO 置信度阈值覆盖（测试用）\n  --iou F                 NMS IoU 阈值覆盖\n"
+      "  --cli-arm BRIDGE        手工 ARM 测试（north/south），不走 UDS\n  --cli-file PATH         CLI 测试用本地视频文件（代替 RTSP，板端验证）\n"
       "  --mmsi MMSI             手工 ARM 时的 MMSI\n"
       "  --direction DIR         upstream|downstream\n"
       "  --timeout SEC           会话超时（默认 180）\n"
@@ -87,8 +87,9 @@ void print_usage() {
 int main(int argc, char** argv) {
   std::string bmodel, capture_dir = "/data/hangzhouwan/bridge/captures";
   std::string socket_path = "/run/hangzhouwan/bridge-capture.sock";
-  std::string north_env, south_env, cli_arm, mmsi, direction = "upstream";
+  std::string north_env, south_env, cli_arm, mmsi, direction = "upstream", cli_file;
   int device = 0, fps = 5, timeout_sec = 180;
+  float conf = -1.0f, iou = -1.0f;
   bool upload_enabled = false;
   std::string upload_host = "127.0.0.1";
   int upload_port = 8080;
@@ -109,7 +110,10 @@ int main(int argc, char** argv) {
     else if (a == "--north-url-env") north_env = next("--north-url-env");
     else if (a == "--south-url-env") south_env = next("--south-url-env");
     else if (a == "--fps") fps = std::atoi(next("--fps").c_str());
+    else if (a == "--conf") conf = std::stof(next("--conf"));
+    else if (a == "--iou") iou = std::stof(next("--iou"));
     else if (a == "--cli-arm") cli_arm = next("--cli-arm");
+    else if (a == "--cli-file") cli_file = next("--cli-file");
     else if (a == "--mmsi") mmsi = next("--mmsi");
     else if (a == "--direction") direction = next("--direction");
     else if (a == "--timeout") timeout_sec = std::atoi(next("--timeout").c_str());
@@ -131,6 +135,13 @@ int main(int argc, char** argv) {
   cfg.north.session_timeout_sec = timeout_sec;
   cfg.south = make_bridge_cfg("south", south_env, fps);
   cfg.south.session_timeout_sec = timeout_sec;
+  if (!cli_file.empty()) {
+    // CLI 文件测试模式：用本地文件代替 RTSP（板端 VPU 验证，不连生产流）
+    cfg.north.test_file = cli_file;
+    cfg.south.test_file = cli_file;
+  }
+  if (conf >= 0.0f) { cfg.north.conf = conf; cfg.south.conf = conf; }
+  if (iou >= 0.0f) { cfg.north.iou = iou; cfg.south.iou = iou; }
 
   hzw::CaptureEngine engine;
   g_engine = &engine;
