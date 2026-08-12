@@ -203,13 +203,46 @@ bool BmcvProcessor::draw_colored_rectangles(AVFrame* frame,
 }
 
 bool BmcvProcessor::crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int crop_h,
-                               Image& out, std::string& err) {
+                               Image& out, std::string& err, bool auto_upscale) {
   if (!p_ || !p_->ready) { err = "BMCV crop: 未初始化"; return false; }
   if (!frame) { err = "BMCV crop: frame 为空"; return false; }
   if (crop_w <= 0 || crop_h <= 0) { err = "BMCV crop: 尺寸非法"; return false; }
   // BMCV VPP 对极小输出尺寸不支持（实测 <32px 报 vpp dst width not match）。
-  // 抓拍 bbox 裁剪通常远大于此；过小时返回失败由上层处理，不崩溃。
-  constexpr int kMinCropDim = 32;
+  // 默认 32px；当 bbox 小于 min_out_dim 时按请求方向（auto_upscale）扩展源 crop，
+  // 使输出 >= min_out_dim；否则返回失败由上层处理。
+  int min_out_dim = 32;
+  if (min_out_dim < 2) min_out_dim = 2;  // NV12 色度 2x 下采样要求偶数
+  // 自动扩展到 min_out_dim：保持原 bbox 居中，向四周取上下文。
+  if (auto_upscale && (crop_w < min_out_dim || crop_h < min_out_dim)) {
+    int pad_w = (min_out_dim - crop_w) / 2;
+    int pad_h = (min_out_dim - crop_h) / 2;
+    int new_x = x - pad_w;
+    int new_y = y - pad_h;
+    int new_w = crop_w + 2 * pad_w;
+    int new_h = crop_h + 2 * pad_h;
+    // 优先让较长的一边先达到 min_out_dim；
+    // 若源分辨率不足，按比例缩放以满足 min_out_dim。
+    if (new_w < min_out_dim) {
+      int extra = min_out_dim - new_w;
+      new_w = min_out_dim;
+      new_x -= extra / 2;
+    }
+    if (new_h < min_out_dim) {
+      int extra = min_out_dim - new_h;
+      new_h = min_out_dim;
+      new_y -= extra / 2;
+    }
+    // clamp 到源边界
+    if (new_x < 0) new_x = 0;
+    if (new_y < 0) new_y = 0;
+    if (new_x + new_w > p_->src_w) new_w = p_->src_w - new_x;
+    if (new_y + new_h > p_->src_h) new_h = p_->src_h - new_y;
+    if (new_w < min_out_dim) new_w = std::min(min_out_dim, p_->src_w - new_x);
+    if (new_h < min_out_dim) new_h = std::min(min_out_dim, p_->src_h - new_y);
+    if (new_w >= min_out_dim && new_h >= min_out_dim && new_x >= 0 && new_y >= 0) {
+      x = new_x; y = new_y; crop_w = new_w; crop_h = new_h;
+    }
+  }
   // clamp 到源边界
   if (x < 0) x = 0;
   if (y < 0) y = 0;
@@ -221,8 +254,8 @@ bool BmcvProcessor::crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int cr
   crop_w = crop_w & ~1;
   crop_h = crop_h & ~1;
   if (crop_w <= 0 || crop_h <= 0) { err = "BMCV crop: 裁剪区域越界"; return false; }
-  if (crop_w < kMinCropDim || crop_h < kMinCropDim) {
-    err = "BMCV crop: 裁剪区域过小";
+  if (crop_w < min_out_dim || crop_h < min_out_dim) {
+    err = "BMCV crop: 裁剪区域过小（已尝试 auto_upscale）";
     return false;
   }
 

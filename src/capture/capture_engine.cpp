@@ -349,7 +349,7 @@ void CaptureEngine::run_session(Session& s, const CaptureArmRequest& req) {
           if (bmcv_ready) {
             crop_ok = bmcv.crop_to_rgb(vf.frame, static_cast<int>(pb.x1), static_cast<int>(pb.y1),
                                        static_cast<int>(pb.x2 - pb.x1 + 1),
-                                       static_cast<int>(pb.y2 - pb.y1 + 1), rgb_crop, berr);
+                                       static_cast<int>(pb.y2 - pb.y1 + 1), rgb_crop, berr, true);
           }
           if (getenv("HZW_CAPTURE_DEBUG")) std::fprintf(stderr, "DBG | crop_ok=%d valid=%d err=%s w=%d h=%d\n", (int)crop_ok, (int)rgb_crop.valid(), berr.c_str(), rgb_crop.width, rgb_crop.height);
           vf.release();  // 立即释放 VPU 帧

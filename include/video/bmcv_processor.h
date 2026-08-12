@@ -72,8 +72,10 @@ class BmcvProcessor {
   // 抓拍裁剪：从 AVFrame(NV12) 按 bbox(x,y,w,h) 在设备侧 crop + CSC 为 RGB_PACKED，
   // 再 D2H 到 host Image。避免整帧 RGB D2H + CPU crop。坐标已 clamp 到图像边界。
   // crop_w/crop_h 必须 >0。成功返回 true，out 为有效 RGB Image。
+  // auto_upscale=true 时若 crop<32px 沿原 bbox 居中扩展源 crop 至 >=32px；
+  // 输出尺寸可能 > 原 bbox。auto_upscale=false 沿用原 32px 硬门禁。
   bool crop_to_rgb(AVFrame* frame, int x, int y, int crop_w, int crop_h,
-                   Image& out, std::string& err);
+                   Image& out, std::string& err, bool auto_upscale = false);
 
   bool resize_yuv420p(AVFrame* frame, int output_width, int output_height,
                       AVFrame** output, std::string& err,
