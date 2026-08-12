@@ -203,15 +203,22 @@ python3 -m pytest tests/ -q
 # 68 passed
 ```
 
-### REAL CAMERA VALIDATION
+### REAL CAMERA VALIDATION（2026-08-12 板端 PASS / 校准待补）
 
-- `CAPTURE_NORTH_URL`：**未配置**（板端 `.env` 留空）
+- `CAPTURE_NORTH_URL`：`rtsp://admin:***@112.16.184.176:48554/streaming/Channels/801`
+  （与 hangzhouwan A 路生产流同源；写于 `/etc/hangzhouwan/bridge-capture.env`）
 - `CAPTURE_SOUTH_URL`：**未配置**
 
-`REAL CAMERA VALIDATION: NOT RUN`
-`reason: CAPTURE_NORTH_URL / CAPTURE_SOUTH_URL not configured`
+UDS `arm` 命令接受 → RTSP 2560×1440@25fps 连接成功 → YOLOv7 推理
+检出 bbox (2104,629,2151,640) 大小 47×11 px → 候选窗口 1500ms →
+BMCV crop 拒绝（裁剪区域过小：47×11 padding 60×13 < 32px 最低裁剪门限）。
 
-补真实 URL 后按"手工 ARM 测试"一节跑一次即可，无需改代码。
+`REAL CAMERA VALIDATION: PARTIAL`
+`reason: pipeline works end-to-end on real RTSP; current north camera FOV
+too wide for >32px detection. ROI 校准或换更窄 FOV 子流后即可产出有效 JPEG。`
+
+ROI 校准前不要放开 `bridge.yaml::capture.enabled: true`，否则每次小目标
+ARM 都会触发 0 字节写入浪费 VPU 资源。
 
 ### KNOWN LIMITATIONS
 
